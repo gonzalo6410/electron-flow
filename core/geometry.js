@@ -5,11 +5,15 @@
 //    2 linear, 3 flat triangle, 4 tetrahedron, 5 trigonal bipyramid, 6 octahedron.
 //    In a trigonal bipyramid lone pairs go equatorial and the weakest bonds go axial (so the SN2
 //    transition state puts the two half bonds on the axis). In an octahedron two lone pairs go trans.
-// 2. Atoms are first placed by walking the bond graph and copying template directions.
+// 2. Atoms are first placed by walking the bond graph and copying template directions (a flat atom
+//    in a small ring uses the ring's polygon angle, see atomTemplate).
 // 3. Then positions are relaxed as springs: bond lengths from covalent radii scaled by bond order,
-//    angles toward the template angles, atoms sharing a double or partial-double bond held flat
-//    together, non-bonded atoms pushed apart. Numerical gradient descent; molecules are small.
-// 4. Group 1 and 2 cations are placed beside their adjacency partner at a loose distance.
+//    angles toward the template angles as adjusted by the ring and lone pair rules (see
+//    angleTargets), atoms sharing a double or partial-double bond held flat together, non-bonded
+//    atoms pushed apart. The forces are exact derivatives of the spring energy and the relaxation
+//    is a quasi-Newton descent (L-BFGS), so twenty atoms take a few milliseconds.
+// 4. Group 1 and 2 cations are placed beside their adjacency partner at a loose distance, held by
+//    a tether too weak to bend the partner.
 
 import { element } from './elements.js';
 
@@ -48,6 +52,26 @@ export function bondLength(elI, elJ, order, transition = false) {
   return base * f;
 }
 
+// Length of the bond on edge k of a result, by the rule above plus one more rule: a single bond
+// from a positively charged atom of the third row or beyond to a negatively charged partner (the
+// S2+ to O- bonds of sulfate, P+ to O- of phosphate, Cl3+ to O- of perchlorate, S+ to O- of DMSO)
+// is drawn at the double-bond length. The charge separation that the octet ceiling forces on these
+// atoms is a short, strongly polar bond: sulfate's S-O is 1.49 angstrom, not the 1.71 of a plain
+// single bond. Charges are the averages over the structures.
+export function edgeLength(node, result, k) {
+  const [i, j] = result.edges[k];
+  const sym = node.atoms.map(a => a.el);
+  const order = result.avg.orders[k];
+  const transition = !!(result.transitionEdges && result.transitionEdges[k]);
+  if (Math.abs(order - 1) < 1e-6 && !transition) {
+    const qi = result.avg.charge[i], qj = result.avg.charge[j];
+    const pos = qi >= 0.5 - 1e-9 ? i : qj >= 0.5 - 1e-9 ? j : -1;
+    const neg = qi <= -0.5 + 1e-9 ? i : qj <= -0.5 + 1e-9 ? j : -1;
+    if (pos >= 0 && neg >= 0 && element(sym[pos]).Z > 10) return bondLength(sym[i], sym[j], 2);
+  }
+  return bondLength(sym[i], sym[j], order, transition);
+}
+
 // Electron groups per atom: neighbours bonded in the average (any order above zero; the carbon of
 // the SN2 state has five) plus whole lone pairs in the average (a fractional lone pair, like the
 // oxygen pair that is becoming the O-C bond, is already represented by its partial bond, so it is
@@ -63,11 +87,12 @@ export function electronGroups(node, result) {
   result.edges.forEach(([i, j], k) => {
     if (result.avg.orders[k] <= 1e-9 && (node.fixed[i] || node.fixed[j])) { assoc[i].push(j); assoc[j].push(i); }
   });
+  // pairs: the average lone pairs, fractions included, used by the angle rules
   return node.atoms.map((a, i) => {
-    if (node.fixed[i]) return { nbrs: nbrs[i], lonePairs: 0, groups: 1, assoc: assoc[i] };
+    if (node.fixed[i]) return { nbrs: nbrs[i], lonePairs: 0, pairs: 0, groups: 1, assoc: assoc[i] };
     const lonePairs = Math.floor(result.avg.lone[i] / 2 + 1e-9);
     const groups = Math.max(1, Math.min(6, nbrs[i].length + lonePairs));
-    return { nbrs: nbrs[i], lonePairs: Math.max(0, groups - nbrs[i].length), groups, assoc: assoc[i] };
+    return { nbrs: nbrs[i], lonePairs: Math.max(0, groups - nbrs[i].length), pairs: result.avg.lone[i] / 2, groups, assoc: assoc[i] };
   });
 }
 
@@ -88,6 +113,27 @@ function ringThrough(groups, i, j) {
         return ring;
       }
       queue.push(b);
+    }
+  }
+  return null;
+}
+
+// Shortest ring holding the path a-i-b (the two ring bonds of atom i), as a set of atoms, or null.
+function ringThroughAngle(groups, a, i, b) {
+  const prev = new Map([[a, null]]);
+  const queue = [a];
+  while (queue.length) {
+    const x = queue.shift();
+    for (const nb of groups[x].nbrs) {
+      const y = nb.j;
+      if (y === i || prev.has(y)) continue;
+      prev.set(y, x);
+      if (y === b) {
+        const ring = new Set([i]);
+        for (let z = b; z !== null; z = prev.get(z)) ring.add(z);
+        return ring;
+      }
+      queue.push(y);
     }
   }
   return null;
@@ -135,17 +181,15 @@ function rotateAbout(axis, ang) {
   return u => add(add(scale(u, c), scale(cross(axis, u), s)), scale(axis, dot(axis, u) * (1 - c)));
 }
 
-function isTransitionEdge(result, i, j) {
-  if (!result.transitionEdges) return false;
-  const k = result.edges.findIndex(([a, b]) => (a === i && b === j) || (a === j && b === i));
-  return k >= 0 && !!result.transitionEdges[k];
+function edgeIndex(result, i, j) {
+  return result.edges.findIndex(([a, b]) => (a === i && b === j) || (a === j && b === i));
 }
 
 // Initial placement by walking the graph.
 function initialPlace(node, result, groups) {
   const n = node.atoms.length;
   const pos = new Array(n).fill(null);
-  const slotOf = groups.map(assignSlots);
+  const templates = groups.map((g, i) => atomTemplate(groups, i));
   const placedDir = Array.from({ length: n }, () => ({})); // atom -> {neighbour j: unit dir}
   const sym = node.atoms.map(a => a.el);
 
@@ -173,8 +217,7 @@ function initialPlace(node, result, groups) {
     const seen = new Set([start]);
     while (queue.length) {
       const { i, parent, grand, ringSign } = queue.pop(); // depth first, so a ring is walked in one direction
-      const T = TEMPLATES[groups[i].groups];
-      const slots = slotOf[i];
+      const { T, slots } = templates[i];
       // orient template: slot holding parent points to parent
       let rot = u => u;
       if (parent !== null) {
@@ -244,8 +287,7 @@ function initialPlace(node, result, groups) {
         const dir = rot(t);
         placedDir[i][j] = dir;
         if (pos[j] !== null) return; // ring closure, leave where it is
-        const nb = groups[i].nbrs.find(x => x.j === j);
-        const d = bondLength(sym[i], sym[j], nb.order, isTransitionEdge(result, i, j));
+        const d = edgeLength(node, result, edgeIndex(result, i, j));
         pos[j] = add(pos[i], scale(dir, d));
         if (!seen.has(j)) { seen.add(j); queue.push({ i: j, parent: i, grand: parent, ringSign: -ringSign }); }
       });
@@ -267,48 +309,120 @@ function initialPlace(node, result, groups) {
   return pos;
 }
 
-// Energy of a set of positions under the spring rules.
-function makeEnergy(node, result, groups) {
+// Ring rule. A flat ring of n atoms has interior angles of 180 - 360/n, so the angle between the two
+// ring bonds of a ring atom aims at that value when it is below the template angle (108 in a
+// five-ring, 90 in a four-ring, 60 in a three-ring), and also when it is above it but every atom of
+// the ring is flat (128.6 in tropylium's seven-ring; a seven-ring with a tetrahedral atom keeps 120
+// and folds instead). Rings of up to seven atoms count, the shortest ring through the two bonds.
+// Returns the angle in radians, or null when the pair a-i-b is not such a ring pair.
+function ringAngle(groups, i, a, b, template) {
+  const ring = ringThroughAngle(groups, a, i, b);
+  if (!ring || ring.size > 7) return null;
+  const polygon = Math.PI - 2 * Math.PI / ring.size;
+  if (polygon < template - 1e-9) return polygon;
+  if (groups[i].groups === 3 && [...ring].every(x => groups[x].groups === 3)) return polygon;
+  return null;
+}
+
+// Template directions and slot assignment for one atom. A flat atom whose two ring bonds fall under
+// the ring rule gets its own flat template with the ring angle between those two slots and the third
+// slot opening the rest of the plane (126 beside the 108 of a five-ring); a bridgehead between two
+// such rings gets both ring angles. Everything else uses the shared templates. The placement walks
+// with these directions, so a five- or seven-ring starts out as a regular polygon.
+function atomTemplate(groups, i) {
+  const g = groups[i];
+  const plain = { T: TEMPLATES[g.groups], slots: assignSlots(g) };
+  if (g.groups !== 3) return plain;
+  const nb = g.nbrs.map(x => x.j);
+  const ringPairs = [];
+  for (let x = 0; x < nb.length; x++) for (let y = x + 1; y < nb.length; y++) {
+    const ang = ringAngle(groups, i, nb[x], nb[y], 2 * Math.PI / 3);
+    if (ang !== null) ringPairs.push({ a: nb[x], b: nb[y], ang });
+  }
+  const flat = ang => [Math.cos(ang), Math.sin(ang), 0];
+  if (ringPairs.length === 1) {
+    const { a, b, ang } = ringPairs[0];
+    const third = nb.find(j => j !== a && j !== b);
+    return { T: [flat(0), flat(ang), flat(Math.PI + ang / 2)], slots: [a, b, third === undefined ? 'lp' : third] };
+  }
+  if (ringPairs.length === 2) {
+    const [p, q] = ringPairs;
+    const shared = [p.a, p.b].find(j => j === q.a || j === q.b);
+    if (shared === undefined) return plain;
+    const pa = p.a === shared ? p.b : p.a, qa = q.a === shared ? q.b : q.a;
+    return { T: [flat(0), flat(p.ang), flat(-q.ang)], slots: [shared, pa, qa] };
+  }
+  return plain;
+}
+
+// Angle targets at atom i, one per pair of neighbours, from the template angles and two rules:
+// the ring rule above (for a tetrahedral atom it is applied here; for a flat atom it is already in
+// the template), and the lone pair rule. A lone pair that sits in one of the atom's slots takes more
+// room than a bond and narrows every angle between the atom's bonds by 2.5 degrees per pair, counted
+// with the weights of the structures: water 104.5, ammonia 107, pyridine's C-N-C 117.5, furan's
+// C-O-C 105 (108 minus 3 for its 1.2 pairs). A pair with no slot (the amide nitrogen's pair, which
+// is in the p orbital above the plane) narrows nothing. Atoms with five or six groups keep their
+// templates.
+const NARROWING = 2.5 * DEG;
+function angleTargets(groups, i, T, slots) {
+  const g = groups[i];
+  const pairs = []; // {a, b, theta0}
+  for (let s = 0; s < T.length; s++) for (let t = s + 1; t < T.length; t++) {
+    const a = slots[s], b = slots[t];
+    if (a === null || b === null || a === 'lp' || b === 'lp') continue;
+    pairs.push({ a, b, theta0: Math.acos(Math.max(-1, Math.min(1, dot(T[s], T[t])))) });
+  }
+  if (g.groups === 4) {
+    for (const p of pairs) {
+      const ring = ringAngle(groups, i, p.a, p.b, p.theta0);
+      if (ring !== null) p.theta0 = ring;
+    }
+  }
+  if ((g.groups === 3 || g.groups === 4) && g.lonePairs > 0) pairs.forEach(p => { p.theta0 -= NARROWING * g.pairs; });
+  return pairs;
+}
+
+// A spectator ion is held beside its partner by a tether this fraction as stiff as a bond: enough to
+// keep it there, never enough to bend the partner (the Na+ of the SN2 state is tied to both the O
+// and the Cl and must not pull the O-C-Cl axis off straight; the pushes keep it clear of the rest).
+const LOOSE = 0.01;
+
+// The spring terms, built once per molecule from the rules above. Positions are handled as one flat
+// array x = [x0, y0, z0, x1, y1, z1, ...] so the relaxation can work on it directly.
+function springTerms(node, result, groups) {
   const n = node.atoms.length;
   const sym = node.atoms.map(a => a.el);
-  const bonds = []; // {i, j, d0}
+  const kb = 100, ka = 30, kf = 10, kr = 5;
+
+  const bonds = []; // {i, j, d0, k}
   result.edges.forEach(([i, j], k) => {
     const o = result.avg.orders[k];
-    if (o > 1e-9) bonds.push({ i, j, d0: bondLength(sym[i], sym[j], o, !!(result.transitionEdges && result.transitionEdges[k])), order: o });
-    else if (node.fixed[i] || node.fixed[j]) bonds.push({ i, j, d0: element(sym[i]).radius + element(sym[j]).radius + 0.2, order: 0, loose: true });
+    if (o > 1e-9) bonds.push({ i, j, d0: edgeLength(node, result, k), order: o, k: kb });
+    else if (node.fixed[i] || node.fixed[j]) bonds.push({ i, j, d0: element(sym[i]).radius + element(sym[j]).radius + 0.2, order: 0, k: LOOSE * kb });
   });
-  const bonded = new Set(bonds.map(b => `${b.i}-${b.j}`));
-  const isBonded = (i, j) => bonded.has(`${Math.min(i, j)}-${Math.max(i, j)}`);
 
-  // angle terms from template slots
-  const angles = []; // {i, a, b, theta0}
-  const slotOf = groups.map(assignSlots);
+  // angle terms from template slots; the target can be narrowed by lone pairs or set by a ring
+  const angles = []; // {i, a, b, theta0, k}
   groups.forEach((g, i) => {
-    const T = TEMPLATES[g.groups];
-    const slots = slotOf[i];
-    for (let s = 0; s < T.length; s++) for (let t = s + 1; t < T.length; t++) {
-      const a = slots[s], b = slots[t];
-      if (a === null || b === null || a === 'lp' || b === 'lp') continue;
-      angles.push({ i, a, b, theta0: Math.acos(Math.max(-1, Math.min(1, dot(T[s], T[t])))) });
-    }
+    const { T, slots } = atomTemplate(groups, i);
+    for (const p of angleTargets(groups, i, T, slots)) angles.push({ i, a: p.a, b: p.b, theta0: p.theta0, k: ka });
   });
-  const oneThree = new Set(angles.map(x => `${Math.min(x.a, x.b)}-${Math.max(x.a, x.b)}`));
 
   // flatness across bonds between two flat (three-group) centres: strong for double or partial-double
   // bonds, weak for a single bond joining two flat centres (conjugation, butadiene's middle bond)
-  const flats = []; // {i, j, a, b, k}
+  const flats = []; // {a, i, j, b, k}: dihedral a-i-j-b, flat means sin = 0
   bonds.forEach(({ i, j, order }) => {
     if (groups[i].groups !== 3 || groups[j].groups !== 3) return;
-    const k = order > 1.05 ? 1 : 0.3;
+    const k = kf * (order > 1.05 ? 1 : 0.3);
     for (const na of groups[i].nbrs) for (const nb of groups[j].nbrs) {
       if (na.j === j || nb.j === i) continue;
-      flats.push({ i, j, a: na.j, b: nb.j, k });
+      flats.push({ a: na.j, i, j, b: nb.j, k });
     }
   });
 
   // at a linear atom with two multiple bonds (allene, ketene) the planes of its two neighbours are at
   // right angles, because the two pi parts are
-  const twists = []; // {x, z, a, b}
+  const twists = []; // {a, i, j, b, k}: dihedral a-i-j-b about the i...j axis, right angle means cos = 0
   groups.forEach((g, y) => {
     if (g.groups !== 2 || g.nbrs.length !== 2) return;
     const [x, z] = g.nbrs.map(nb => nb.j);
@@ -316,50 +430,171 @@ function makeEnergy(node, result, groups) {
     if (ox <= 1.05 || oz <= 1.05) return;
     for (const na of groups[x].nbrs) for (const nb of groups[z].nbrs) {
       if (na.j === y || nb.j === y) continue;
-      twists.push({ x, z, a: na.j, b: nb.j });
+      twists.push({ a: na.j, i: x, j: z, b: nb.j, k: kf });
     }
   });
 
-  const kb = 100, ka = 30, kf = 10, kr = 5;
-  function energy(pos) {
+  // non-bonded push between atoms that share no bond and no angle term
+  const excluded = new Uint8Array(n * n);
+  for (const b of bonds) { excluded[b.i * n + b.j] = 1; excluded[b.j * n + b.i] = 1; }
+  for (const x of angles) { excluded[x.a * n + x.b] = 1; excluded[x.b * n + x.a] = 1; }
+  const pushes = []; // {i, j, d0, k}
+  for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
+    if (excluded[i * n + j]) continue;
+    pushes.push({ i, j, d0: 1.6 * (element(sym[i]).radius + element(sym[j]).radius), k: kr });
+  }
+  return { n, bonds, angles, flats, twists, pushes };
+}
+
+// Energy and its exact derivative for the spring terms, on a flat position array.
+// energy(x) returns E; gradient(x, g) fills g with dE/dx and returns E.
+export function energyModel(node, result, groups = electronGroups(node, result)) {
+  const terms = springTerms(node, result, groups);
+  const { bonds, angles, flats, twists, pushes } = terms;
+
+  // cosine of the dihedral a-i-j-b and, when asked, its derivative with respect to the four atoms
+  function dihedralCos(x, a, i, j, b, want) {
+    const b1x = x[3 * i] - x[3 * a], b1y = x[3 * i + 1] - x[3 * a + 1], b1z = x[3 * i + 2] - x[3 * a + 2];
+    const b2x = x[3 * j] - x[3 * i], b2y = x[3 * j + 1] - x[3 * i + 1], b2z = x[3 * j + 2] - x[3 * i + 2];
+    const b3x = x[3 * b] - x[3 * j], b3y = x[3 * b + 1] - x[3 * j + 1], b3z = x[3 * b + 2] - x[3 * j + 2];
+    const n1 = [b1y * b2z - b1z * b2y, b1z * b2x - b1x * b2z, b1x * b2y - b1y * b2x];
+    const n2 = [b2y * b3z - b2z * b3y, b2z * b3x - b2x * b3z, b2x * b3y - b2y * b3x];
+    const l1 = len(n1), l2 = len(n2);
+    if (l1 < 1e-9 || l2 < 1e-9) return null;
+    const c = dot(n1, n2) / (l1 * l2);
+    if (!want) return { c };
+    // dc/dn1, dc/dn2, then back through the cross products to the bond vectors
+    const g1 = sub(scale(n2, 1 / (l1 * l2)), scale(n1, c / (l1 * l1)));
+    const g2 = sub(scale(n1, 1 / (l1 * l2)), scale(n2, c / (l2 * l2)));
+    const b1 = [b1x, b1y, b1z], b2 = [b2x, b2y, b2z], b3 = [b3x, b3y, b3z];
+    const d1 = cross(b2, g1);
+    const d2 = add(cross(g1, b1), cross(b3, g2));
+    const d3 = cross(g2, b2);
+    return { c, da: scale(d1, -1), di: sub(d1, d2), dj: sub(d2, d3), db: d3 };
+  }
+
+  function evaluate(x, g) {
     let E = 0;
-    for (const b of bonds) {
-      const d = len(sub(pos[b.i], pos[b.j]));
-      E += (b.loose ? 0.2 : 1) * kb * (d - b.d0) ** 2;
+    if (g) g.fill(0);
+    for (const t of bonds) {
+      const dx = x[3 * t.i] - x[3 * t.j], dy = x[3 * t.i + 1] - x[3 * t.j + 1], dz = x[3 * t.i + 2] - x[3 * t.j + 2];
+      const d = Math.hypot(dx, dy, dz);
+      E += t.k * (d - t.d0) ** 2;
+      if (!g || d < 1e-12) continue;
+      const f = 2 * t.k * (d - t.d0) / d;
+      g[3 * t.i] += f * dx; g[3 * t.i + 1] += f * dy; g[3 * t.i + 2] += f * dz;
+      g[3 * t.j] -= f * dx; g[3 * t.j + 1] -= f * dy; g[3 * t.j + 2] -= f * dz;
     }
-    for (const x of angles) {
-      const u = sub(pos[x.a], pos[x.i]), v = sub(pos[x.b], pos[x.i]);
-      const c = dot(u, v) / (len(u) * len(v) + 1e-12);
-      const th = Math.acos(Math.max(-1, Math.min(1, c)));
-      E += ka * (th - x.theta0) ** 2;
+    for (const t of angles) {
+      const u = [x[3 * t.a] - x[3 * t.i], x[3 * t.a + 1] - x[3 * t.i + 1], x[3 * t.a + 2] - x[3 * t.i + 2]];
+      const v = [x[3 * t.b] - x[3 * t.i], x[3 * t.b + 1] - x[3 * t.i + 1], x[3 * t.b + 2] - x[3 * t.i + 2]];
+      const lu = len(u), lv = len(v);
+      const c = Math.max(-1, Math.min(1, dot(u, v) / (lu * lv + 1e-12)));
+      const th = Math.acos(c);
+      E += t.k * (th - t.theta0) ** 2;
+      if (!g) continue;
+      const s = Math.sqrt(1 - c * c);
+      if (s < 1e-8) continue; // at a straight angle the direction of steepest change is undefined and the slope is zero
+      const f = -2 * t.k * (th - t.theta0) / s; // dE/dc
+      for (let q = 0; q < 3; q++) {
+        const ga = f * (v[q] / (lu * lv) - c * u[q] / (lu * lu));
+        const gb = f * (u[q] / (lu * lv) - c * v[q] / (lv * lv));
+        g[3 * t.a + q] += ga; g[3 * t.b + q] += gb; g[3 * t.i + q] -= ga + gb;
+      }
     }
-    for (const f of flats) {
-      // dihedral a-i-j-b; flat means sin = 0
-      const b1 = sub(pos[f.i], pos[f.a]), b2 = sub(pos[f.j], pos[f.i]), b3 = sub(pos[f.b], pos[f.j]);
-      const n1 = cross(b1, b2), n2 = cross(b2, b3);
-      const l1 = len(n1), l2 = len(n2);
-      if (l1 < 1e-9 || l2 < 1e-9) continue;
-      const s = len(cross(n1, n2)) / (l1 * l2);
-      E += kf * f.k * s * s;
+    for (const t of flats) {
+      const r = dihedralCos(x, t.a, t.i, t.j, t.b, !!g);
+      if (!r) continue;
+      E += t.k * (1 - r.c * r.c); // sin squared of the dihedral
+      if (!g) continue;
+      const f = -2 * t.k * r.c;
+      for (let q = 0; q < 3; q++) { g[3 * t.a + q] += f * r.da[q]; g[3 * t.i + q] += f * r.di[q]; g[3 * t.j + q] += f * r.dj[q]; g[3 * t.b + q] += f * r.db[q]; }
     }
     for (const t of twists) {
-      // dihedral a-x-z-b about the x...z axis should be 90 degrees: cos = 0
-      const b1 = sub(pos[t.x], pos[t.a]), b2 = sub(pos[t.z], pos[t.x]), b3 = sub(pos[t.b], pos[t.z]);
-      const n1 = cross(b1, b2), n2 = cross(b2, b3);
-      const l1 = len(n1), l2 = len(n2);
-      if (l1 < 1e-9 || l2 < 1e-9) continue;
-      const c = dot(n1, n2) / (l1 * l2);
-      E += kf * c * c;
+      const r = dihedralCos(x, t.a, t.i, t.j, t.b, !!g);
+      if (!r) continue;
+      E += t.k * r.c * r.c;
+      if (!g) continue;
+      const f = 2 * t.k * r.c;
+      for (let q = 0; q < 3; q++) { g[3 * t.a + q] += f * r.da[q]; g[3 * t.i + q] += f * r.di[q]; g[3 * t.j + q] += f * r.dj[q]; g[3 * t.b + q] += f * r.db[q]; }
     }
-    for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
-      if (isBonded(i, j) || oneThree.has(`${i}-${j}`)) continue;
-      const d = len(sub(pos[i], pos[j]));
-      const d0 = 1.6 * (element(sym[i]).radius + element(sym[j]).radius);
-      if (d < d0) E += kr * (d0 - d) ** 2;
+    for (const t of pushes) {
+      const dx = x[3 * t.i] - x[3 * t.j], dy = x[3 * t.i + 1] - x[3 * t.j + 1], dz = x[3 * t.i + 2] - x[3 * t.j + 2];
+      const d = Math.hypot(dx, dy, dz);
+      if (d >= t.d0) continue;
+      E += t.k * (t.d0 - d) ** 2;
+      if (!g || d < 1e-12) continue;
+      const f = -2 * t.k * (t.d0 - d) / d;
+      g[3 * t.i] += f * dx; g[3 * t.i + 1] += f * dy; g[3 * t.i + 2] += f * dz;
+      g[3 * t.j] -= f * dx; g[3 * t.j + 1] -= f * dy; g[3 * t.j + 2] -= f * dz;
     }
     return E;
   }
-  return energy;
+  return { terms, energy: x => evaluate(x, null), gradient: (x, g) => evaluate(x, g) };
+}
+
+// Minimise the model energy from x by the limited-memory quasi-Newton method (L-BFGS): each step
+// goes along a direction built from the last few steps and gradient changes, and a backtracking
+// line search keeps every step a real decrease. No step moves any coordinate more than maxMove.
+function minimize(model, x, { maxIter = 500, gradTol = 1e-3, history = 8, maxMove = 0.3 } = {}) {
+  const n = x.length;
+  const dotv = (a, b) => { let s = 0; for (let q = 0; q < n; q++) s += a[q] * b[q]; return s; };
+  let g = new Float64Array(n), gNew = new Float64Array(n);
+  let xNew = new Float64Array(n);
+  const d = new Float64Array(n);
+  let E = model.gradient(x, g);
+  const S = [], Y = [], rho = [];
+  let it = 0;
+  for (; it < maxIter; it++) {
+    const gnorm = Math.sqrt(dotv(g, g));
+    if (gnorm < gradTol) break;
+    // two-loop recursion: d = H g, where H approximates the inverse curvature
+    d.set(g);
+    const alpha = new Array(S.length);
+    for (let k = S.length - 1; k >= 0; k--) {
+      alpha[k] = rho[k] * dotv(S[k], d);
+      for (let q = 0; q < n; q++) d[q] -= alpha[k] * Y[k][q];
+    }
+    if (S.length) {
+      const k = S.length - 1;
+      const gamma = dotv(S[k], Y[k]) / dotv(Y[k], Y[k]);
+      for (let q = 0; q < n; q++) d[q] *= gamma;
+    } else {
+      for (let q = 0; q < n; q++) d[q] *= 0.02 / gnorm; // first step: a small move along the gradient
+    }
+    for (let k = 0; k < S.length; k++) {
+      const beta = rho[k] * dotv(Y[k], d);
+      for (let q = 0; q < n; q++) d[q] += (alpha[k] - beta) * S[k][q];
+    }
+    let slope = -dotv(g, d);
+    if (slope >= 0) { // the history gave an uphill direction: forget it and go down the gradient
+      S.length = 0; Y.length = 0; rho.length = 0;
+      for (let q = 0; q < n; q++) d[q] = g[q] * 0.02 / gnorm;
+      slope = -dotv(g, d);
+    }
+    let biggest = 0;
+    for (let q = 0; q < n; q++) biggest = Math.max(biggest, Math.abs(d[q]));
+    let step = biggest > maxMove ? maxMove / biggest : 1;
+    let ENew = Infinity, accepted = false;
+    for (let tries = 0; tries < 40; tries++) {
+      for (let q = 0; q < n; q++) xNew[q] = x[q] - step * d[q];
+      ENew = model.gradient(xNew, gNew);
+      if (ENew <= E + 1e-4 * step * slope) { accepted = true; break; }
+      step *= 0.5;
+    }
+    if (!accepted) break;
+    const s = new Float64Array(n), y = new Float64Array(n);
+    for (let q = 0; q < n; q++) { s[q] = xNew[q] - x[q]; y[q] = gNew[q] - g[q]; }
+    const sy = dotv(s, y);
+    if (sy > 1e-12) {
+      S.push(s); Y.push(y); rho.push(1 / sy);
+      if (S.length > history) { S.shift(); Y.shift(); rho.shift(); }
+    }
+    [x, xNew] = [xNew, x];
+    [g, gNew] = [gNew, g];
+    E = ENew;
+  }
+  return { x, energy: E, iterations: it };
 }
 
 export function relax(node, result, opts = {}) {
@@ -371,33 +606,16 @@ export function relax(node, result, opts = {}) {
     const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff - 0.5; };
     pos = pos.map(p => [p[0] + 0.05 * rnd(), p[1] + 0.05 * rnd(), p[2] + 0.05 * rnd()]);
   }
-  const energy = makeEnergy(node, result, groups);
-  const n = pos.length;
-  const h = 1e-4;
-  let step = 0.01;
-  let E = energy(pos);
-  const iters = opts.iters ?? 400;
-  for (let it = 0; it < iters; it++) {
-    const grad = pos.map(() => [0, 0, 0]);
-    for (let i = 0; i < n; i++) for (let c = 0; c < 3; c++) {
-      pos[i][c] += h; const ep = energy(pos);
-      pos[i][c] -= 2 * h; const em = energy(pos);
-      pos[i][c] += h;
-      grad[i][c] = (ep - em) / (2 * h);
-    }
-    const gnorm = Math.sqrt(grad.reduce((s, g) => s + dot(g, g), 0));
-    if (gnorm < 1e-3) break;
-    const trial = pos.map((p, i) => sub(p, scale(grad[i], step)));
-    const Et = energy(trial);
-    if (Et < E) { pos = trial; E = Et; step *= 1.1; } else { step *= 0.5; }
-    if (step < 1e-7) break;
-  }
+  const model = energyModel(node, result, groups);
+  const x = new Float64Array(pos.flat());
+  const done = minimize(model, x, { maxIter: opts.iters ?? 500 });
+  pos = pos.map((_, i) => [done.x[3 * i], done.x[3 * i + 1], done.x[3 * i + 2]]);
   // centre on the heavy atoms
   const heavy = node.atoms.map((a, i) => i).filter(i => node.atoms[i].el !== 'H');
   const ref = heavy.length ? heavy : node.atoms.map((_, i) => i);
   const c = scale(ref.reduce((s, i) => add(s, pos[i]), [0, 0, 0]), 1 / ref.length);
   pos = pos.map(p => sub(p, c));
-  return { pos, energy: E, groups };
+  return { pos, energy: done.energy, groups, iterations: done.iterations };
 }
 
 // Directions for drawing lone pairs: unit vectors that keep away from the bonded neighbours and from

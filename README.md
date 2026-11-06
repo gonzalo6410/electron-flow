@@ -11,7 +11,7 @@ core/      chemistry, no dependence on any renderer
   pi.js         where pi bonds and lone pairs point
   smiles.js     molecules from SMILES (openchemlib reads the text; the engine redoes the chemistry)
   compounds.js  named compounds for the picker, as SMILES with counter-ions
-test/      node test/run.js (known answers), families.js, pi.js, compounds.js, geometry.js, extra.js, rules-lab.js
+test/      node test/run.js (known answers), families.js, pi.js, compounds.js (timings), geometry.js, extra.js, gradient.js (exact forces against finite differences), shapes.js (known-answer shapes), rules-lab.js
 web/       index.html, app.js (three.js viewer), vendor/ (three.js and openchemlib shipped with the page)
 build.sh   assembles dist/ (web + core) for publishing
 
