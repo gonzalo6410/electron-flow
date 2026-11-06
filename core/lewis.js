@@ -63,11 +63,18 @@ export function enumerate(node) {
   );
   if (sBound < 0) sBound = 0;
 
+  // Fewest holes first (largest S), and among those the fewest cut pairs (edges at order 0): the search
+  // asks for assignments with total S and at most `cuts` zeros, cuts rising from 0, so cuts are only
+  // tried when the octet leaves no other way. Trying zeros everywhere, as before, made fused rings
+  // take seconds to minutes.
+  const bondableCount = bondable.filter(Boolean).length;
   let found = [];
   let S = sBound;
-  for (; S >= 0; S--) {
-    found = searchOrders(n, els, edges, maxOrder, S);
-    if (found.length) break;
+  outer: for (; S >= 0; S--) {
+    for (let cuts = 0; cuts <= bondableCount; cuts++) {
+      found = searchOrders(n, els, edges, maxOrder, bondable, S, cuts);
+      if (found.length) break outer;
+    }
   }
   const holes = sumCeil - pool - 2 * S; // in electrons
   const L = pool - 2 * S;                // lone electrons to place
@@ -88,10 +95,8 @@ export function enumerate(node) {
   }
   if (!structures.length) throw new Error('no Lewis structure found');
 
-  // second rule: fewest cut pairs (sigma bonds break only where the octet forces it)
-  const minCuts = Math.min(...structures.map(s => s.cuts));
-  const rejectedByCuts = structures.filter(s => s.cuts > minCuts);
-  structures = structures.filter(s => s.cuts === minCuts);
+  // second rule, fewest cut pairs, is built into the search above; nothing to drop here
+  const rejectedByCuts = [];
 
   // ring rule: no atom in a ring of seven or fewer atoms carries two pi parts (two double bonds, or a
   // triple bond), because such an atom would be linear and a small ring cannot hold it. This removes
@@ -190,32 +195,63 @@ function smallRingAtoms(n, edges, bondable, maxSize) {
   return inRing;
 }
 
-// All bond-order assignments with total exactly S, respecting per-atom ceilings.
-function searchOrders(n, els, edges, maxOrder, S) {
+// All bond-order assignments with total exactly S, at most `maxZeros` bondable edges at order 0,
+// respecting per-atom ceilings. Edges are visited atom by atom so an atom's limit bites early, and two
+// bounds prune: the most the remaining edges could still add, and the least they must add.
+function searchOrders(n, els, edges, maxOrder, bondable, S, maxZeros) {
   const m = edges.length;
-  const results = [];
+  // visit order: breadth first from the atom with most edges, each atom's edges together
+  const edgesAt = Array.from({ length: n }, () => []);
+  edges.forEach(([i, j], k) => { edgesAt[i].push(k); edgesAt[j].push(k); });
+  const order = [];
+  const listed = new Array(m).fill(false);
+  const seen = new Array(n).fill(false);
+  const starts = [...Array(n).keys()].sort((a, b) => edgesAt[b].length - edgesAt[a].length);
+  for (const s0 of starts) {
+    if (seen[s0]) continue;
+    const queue = [s0]; seen[s0] = true;
+    while (queue.length) {
+      const i = queue.shift();
+      for (const k of edgesAt[i]) {
+        if (!listed[k]) { listed[k] = true; order.push(k); }
+        const j = edges[k][0] === i ? edges[k][1] : edges[k][0];
+        if (!seen[j]) { seen[j] = true; queue.push(j); }
+      }
+    }
+  }
+  const capOf = i => Math.floor(els[i].ceiling / 2);
+  const used = new Array(n).fill(0);
   const orders = new Array(m).fill(0);
-  const used = new Array(n).fill(0); // bond order already placed at each atom
-  // suffix bound: most order the remaining edges could add (ignores atom caps, cheap)
-  const suffixMax = new Array(m + 1).fill(0);
-  for (let k = m - 1; k >= 0; k--) suffixMax[k] = suffixMax[k + 1] + maxOrder[k];
+  const results = [];
+  const LIMIT = 20000; // more structures than this is not a teaching molecule
 
-  function rec(k, sum) {
+  function rec(q, sum, zeros) {
+    if (results.length >= LIMIT) return;
     if (sum > S) return;
-    if (sum + suffixMax[k] < S) return;
-    if (k === m) { if (sum === S) results.push([...orders]); return; }
+    // bounds from the edges still to assign
+    let most = 0, mustHave = 0;
+    for (let t = q; t < order.length; t++) {
+      const k = order[t];
+      const [i, j] = edges[k];
+      const top = Math.min(maxOrder[k], capOf(i) - used[i], capOf(j) - used[j]);
+      most += Math.max(0, top);
+      if (bondable[k]) mustHave++;
+    }
+    if (sum + most < S) return;
+    if (sum + Math.max(0, mustHave - (maxZeros - zeros)) > S) return;
+    if (q === order.length) { if (sum === S) results.push([...orders]); return; }
+    const k = order[q];
     const [i, j] = edges[k];
-    const capI = Math.floor((els[i].ceiling) / 2) - used[i];
-    const capJ = Math.floor((els[j].ceiling) / 2) - used[j];
-    const top = Math.min(maxOrder[k], capI, capJ, S - sum);
-    for (let o = top; o >= 0; o--) {
+    const top = Math.min(maxOrder[k], capOf(i) - used[i], capOf(j) - used[j], S - sum);
+    const low = bondable[k] && zeros >= maxZeros ? 1 : 0;
+    for (let o = top; o >= low; o--) {
       orders[k] = o; used[i] += o; used[j] += o;
-      rec(k + 1, sum + o);
+      rec(q + 1, sum + o, zeros + (bondable[k] && o === 0 ? 1 : 0));
       used[i] -= o; used[j] -= o;
     }
     orders[k] = 0;
   }
-  rec(0, 0);
+  rec(0, 0, 0);
   return results;
 }
 

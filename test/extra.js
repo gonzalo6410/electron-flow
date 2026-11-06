@@ -23,3 +23,20 @@ for (const [name, c] of Object.entries(cases)) {
     }
   } catch (e) { console.log(name, 'ERROR', e.message); }
 }
+
+// Kekulé counts of fused aromatics, a known-answer check on the search (anthracene 4, phenanthrene 5,
+// pyrene 6, coronene 20, corannulene 11) and a timing guard
+import { nodeFromSmiles } from '../core/smiles.js';
+{
+  const fused = { anthracene: ['c1ccc2cc3ccccc3cc2c1', 4], phenanthrene: ['c1ccc2c(c1)ccc1ccccc12', 5], pyrene: ['c1cc2ccc3cccc4ccc(c1)c2c34', 6], coronene: ['c1cc2ccc3ccc4ccc5ccc6ccc1c1c2c3c4c5c61', 20], corannulene: ['c1cc2ccc3ccc4ccc5ccc1c1c2c3c4c51', 11] };
+  let bad = 0;
+  for (const [name, [smi, want]] of Object.entries(fused)) {
+    const t0 = performance.now();
+    const r = enumerate(buildNode(nodeFromSmiles(smi)));
+    const ms = performance.now() - t0;
+    const ok = r.structures.length === want && ms < 2000;
+    console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}: ${r.structures.length} structures (want ${want}) in ${ms.toFixed(0)} ms`);
+    if (!ok) bad++;
+  }
+  if (bad) process.exit(1);
+}
