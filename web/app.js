@@ -179,9 +179,15 @@ function load(entry) {
   const extent = Math.max(1.5, ...geo.pos.map(p => Math.hypot(...p)));
   const dist = extent / Math.tan((camera.fov / 2) * Math.PI / 180) * 1.5 + 1;
   const axes = principalAxes(geo.pos.filter((p, i) => node.atoms[i].el !== 'H'));
-  const view = axes.minor.clone().multiplyScalar(Math.cos(0.35)).add(axes.major.clone().multiplyScalar(Math.sin(0.35) * 0.6)).add(axes.middle.clone().multiplyScalar(Math.sin(0.35) * 0.8)).normalize();
+  let view;
+  if (axes.flat) {
+    view = axes.minor.clone().multiplyScalar(Math.cos(0.35)).add(axes.major.clone().multiplyScalar(Math.sin(0.35) * 0.6)).add(axes.middle.clone().multiplyScalar(Math.sin(0.35) * 0.8)).normalize();
+    camera.up.copy(axes.middle);
+  } else {
+    view = new THREE.Vector3(0.38, 0.42, 0.82).normalize(); // a round molecule: off every axis
+    camera.up.set(0, 1, 0);
+  }
   camera.position.copy(view.multiplyScalar(dist));
-  camera.up.copy(axes.middle);
   controls.target.set(0, 0, 0);
   controls.update();
   buildAtoms();
@@ -224,7 +230,8 @@ function principalAxes(points) {
   const major = col(order[0]), middle = col(order[1]);
   const minor = major.clone().cross(middle).normalize();
   if (minor.z < 0) minor.negate();
-  return { major, middle, minor };
+  const flat = m[order[2]][order[2]] < 0.5 * m[order[0]][order[0]]; // a clear flattest face
+  return { major, middle, minor, flat };
 }
 
 function picture() {
@@ -341,35 +348,25 @@ function buildStructure(pic) {
     const rad = atomRadius(el);
     const pairs = pic.lone[i] / 2;
     const whole = Math.floor(pairs + 1e-9);
-    let lps = frame.lonePairs[i];
-    if (style === 'lewis' && lps.some(lp => lp.kind === 'p' || lp.kind === 'free')) {
-      const kept = lps.filter(lp => lp.kind !== 'p' && lp.kind !== 'free');
-      const need = lps.length - kept.length;
-      const bonds = geo.groups[i].nbrs.map(nb => new THREE.Vector3(...pos[nb.j]).sub(new THREE.Vector3(...pos[i])).normalize());
-      let extra = [];
-      const pO = frame.pOrbital[i];
-      if (pO && bonds.length >= 2) {
-        // in the plane, in the widest gaps between the bonds, as dots on a drawing
-        const nrm = new THREE.Vector3(...pO);
-        const ex = bonds[0].clone().sub(nrm.clone().multiplyScalar(bonds[0].dot(nrm))).normalize();
-        const ey = nrm.clone().cross(ex);
-        const angles = [...bonds, ...kept.map(lp => new THREE.Vector3(...lp.dir))].map(v => Math.atan2(v.dot(ey), v.dot(ex))).sort((a, b) => a - b);
-        const gaps = angles.map((a, q) => { const b = q + 1 < angles.length ? angles[q + 1] : angles[0] + 2 * Math.PI; return { mid: (a + b) / 2, size: b - a }; }).sort((a, b) => b.size - a.size);
-        for (let q = 0; q < need && q < gaps.length; q++) {
-          const v = ex.clone().multiplyScalar(Math.cos(gaps[q].mid)).add(ey.clone().multiplyScalar(Math.sin(gaps[q].mid)));
-          extra.push({ dir: v.toArray(), kind: 'free', far: true });
-        }
+    if (style === 'lewis') {
+      // dots as on a drawing: placed around the atom in the plane of the screen, every frame
+      const partners = frame.lonePairs[i].filter(lp => lp.kind === 'partner').map(lp => lp.partner);
+      const count = frame.lonePairs[i].length;
+      for (let q = 0; q < count; q++) {
+        const opacity = q < whole ? 1 : Math.max(0.2, pairs - whole);
+        const sp = pairSprite(opacity);
+        sp.userData.baseOpacity = opacity;
+        g.add(sp);
+        faceCamera.push({ sprite: sp, index: i, kind: 'pair', q, count, partners, group: g });
       }
-      if (extra.length < need) extra.push(...repulsion(bonds.map(b => b.toArray()), [...kept, ...extra].map(lp => lp.dir), need - extra.length).map(dir => ({ dir, kind: 'free' })));
-      lps = [...kept, ...extra];
+      return;
     }
-    lps.forEach((lp, q) => {
+    frame.lonePairs[i].forEach((lp, q) => {
       const opacity = q < whole ? 1 : Math.max(0.2, pairs - whole);
       const sp = pairSprite(opacity);
       sp.userData.baseOpacity = opacity;
       const d = lp.dir;
-      const out = rad + (lp.far ? 0.3 : 0.17);
-      sp.position.set(pos[i][0] + d[0] * out, pos[i][1] + d[1] * out, pos[i][2] + d[2] * out);
+      sp.position.set(pos[i][0] + d[0] * (rad + 0.17), pos[i][1] + d[1] * (rad + 0.17), pos[i][2] + d[2] * (rad + 0.17));
       g.add(sp);
     });
   });
@@ -416,7 +413,7 @@ function swapStructure(next, animate = true) {
   fade = { from: structureGroup, to: next, start: performance.now() };
 }
 
-const FADE = 600;   // ms crossfade
+const FADE = 700;   // ms for the old picture to go and the new one to come
 const DWELL = 2200; // ms per structure, equal weights so equal time
 
 function familyLine() {
@@ -519,8 +516,36 @@ window.addEventListener('keydown', e => {
 });
 
 const camRight = new THREE.Vector3(), camUp = new THREE.Vector3(), toCam = new THREE.Vector3();
+const angleCache = new Map();
+// screen-plane angles for an atom's dot pairs: partner pairs toward their partner, the rest in the
+// widest gaps between the bonds as seen from the camera
+function pairAngles(i, count, partners, group) {
+  const key = `${i}:${count}`;
+  if (angleCache.has(key)) return angleCache.get(key);
+  const pos = current.geo.pos;
+  const p = new THREE.Vector3(...pos[i]);
+  const angleOf = j => { const v = new THREE.Vector3(...pos[j]).sub(p); const x = v.dot(camRight), y = v.dot(camUp); return Math.hypot(x, y) > 0.25 ? Math.atan2(y, x) : null; };
+  const taken = [];
+  for (const nb of current.geo.groups[i].nbrs) { const a = angleOf(nb.j); if (a !== null) taken.push(a); }
+  for (const j of current.geo.groups[i].assoc) { const a = angleOf(j); if (a !== null) taken.push(a); }
+  const out = [];
+  for (const j of partners) { const a = angleOf(j); out.push(a === null ? 0 : a); }
+  while (out.length < count) {
+    const all = [...taken, ...out].sort((a, b) => a - b);
+    if (!all.length) { out.push(Math.PI / 2); continue; }
+    let best = { mid: 0, size: -1 };
+    for (let q = 0; q < all.length; q++) {
+      const a = all[q], b = q + 1 < all.length ? all[q + 1] : all[0] + 2 * Math.PI;
+      if (b - a > best.size) best = { mid: (a + b) / 2, size: b - a };
+    }
+    out.push(best.mid);
+  }
+  angleCache.set(key, out);
+  return out;
+}
 function placeSprites() {
   camera.matrixWorld.extractBasis(camRight, camUp, toCam);
+  angleCache.clear();
   const pos = current.geo.pos;
   for (const f of faceCamera) {
     const p = pos[f.index];
@@ -528,6 +553,12 @@ function placeSprites() {
     toCam.copy(camera.position).sub(new THREE.Vector3(...p)).normalize();
     if (f.kind === 'symbol') {
       f.sprite.position.set(p[0] + toCam.x * rad * 1.25, p[1] + toCam.y * rad * 1.25, p[2] + toCam.z * rad * 1.25);
+    } else if (f.kind === 'pair') {
+      const ang = pairAngles(f.index, f.count, f.partners, f.group);
+      const a = ang[f.q];
+      const o = new THREE.Vector3(...p).add(toCam.clone().multiplyScalar(rad * 1.1))
+        .add(camRight.clone().multiplyScalar(Math.cos(a) * (rad + 0.2))).add(camUp.clone().multiplyScalar(Math.sin(a) * (rad + 0.2)));
+      f.sprite.position.copy(o);
     } else {
       const o = new THREE.Vector3(...p).add(toCam.clone().multiplyScalar(rad)).add(camRight.clone().multiplyScalar(rad * 0.95 + 0.08)).add(camUp.clone().multiplyScalar(rad * 0.85 + 0.06));
       f.sprite.position.copy(o);
@@ -540,9 +571,10 @@ function animate(t) {
   if (current) {
     if (fade) {
       const f = Math.min(1, (t - fade.start) / FADE);
-      const s = f * f * (3 - 2 * f);
-      setOpacity(fade.from, 1 - s);
-      setOpacity(fade.to, s);
+      // first the old picture goes, then the new one comes: never two at once
+      const outPart = Math.min(1, f * 2), inPart = Math.max(0, f * 2 - 1);
+      setOpacity(fade.from, 1 - outPart * outPart * (3 - 2 * outPart));
+      setOpacity(fade.to, inPart * inPart * (3 - 2 * inPart));
       if (f >= 1) {
         scene.remove(fade.from);
         for (let k = faceCamera.length - 1; k >= 0; k--) if (faceCamera[k].group === fade.from) faceCamera.splice(k, 1);

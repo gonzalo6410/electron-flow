@@ -173,7 +173,7 @@ export function piFrame(node, result, pos, groups, pic) {
     // pairs beyond the slots
     let extra = want - Math.min(want, slots);
     const partners = nb.filter(j => picOrder(i, j) < 1 - 1e-6); // bond absent or partial in this picture
-    for (const j of partners) { if (extra <= 0) break; out.push({ dir: dirTo(i, j), kind: 'partner' }); extra--; }
+    for (const j of partners) { if (extra <= 0) break; out.push({ dir: dirTo(i, j), kind: 'partner', partner: j }); extra--; }
     if (extra > 0 && pOrbital[i]) { out.push({ dir: pOrbital[i], kind: 'p' }); extra--; }
     if (extra > 0 && pOrbital[i]) { out.push({ dir: scale(pOrbital[i], -1), kind: 'p' }); extra--; }
     if (extra > 0) repulsion(d, out.map(o => o.dir), extra).forEach(dir => out.push({ dir, kind: 'free' }));
