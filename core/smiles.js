@@ -27,15 +27,19 @@ export function nodeFromSmiles(smiles) {
   for (let b = 0; b < m.getAllBonds(); b++) adj.push([m.getBondAtom(0, b), m.getBondAtom(1, b)]);
   const charge = atoms.reduce((s, a) => s + a.written, 0);
 
-  // tie loose ions to partners
+  // tie loose ions to partners: each cation to its own negatively written atom (the first free one),
+  // each loose anion to a positively written atom, failing that to the most or least electronegative
   const bonded = new Set(adj.flat());
+  const taken = new Set();
   for (let i = 0; i < n; i++) {
     const a = atoms[i];
     const loose = element(a.el).ionic || (!bonded.has(i) && n > 1 && a.written !== 0);
     if (!loose || bonded.has(i)) continue;
     const wantSign = a.written > 0 ? -1 : 1;
-    let partner = atoms.findIndex((b, j) => j !== i && Math.sign(b.written) === wantSign && !element(b.el).ionic);
-    if (partner < 0) {
+    const candidates = atoms.map((b, j) => j).filter(j => j !== i && Math.sign(atoms[j].written) === wantSign && !element(atoms[j].el).ionic && !atoms[j].loose);
+    let partner = candidates.find(j => !taken.has(j));
+    if (partner === undefined && candidates.length) partner = candidates[0];
+    if (partner === undefined) {
       let best = -1, bestEn = wantSign < 0 ? -1 : 99;
       atoms.forEach((b, j) => {
         if (j === i || element(b.el).ionic || b.el === 'H') return;
@@ -44,7 +48,7 @@ export function nodeFromSmiles(smiles) {
       });
       partner = best;
     }
-    if (partner >= 0) adj.push([i, partner]);
+    if (partner >= 0) { adj.push([i, partner]); taken.add(partner); }
   }
   // a single-atom piece written with a negative charge is a spectator anion
   return { atoms: atoms.map((a, i) => ({ el: a.el, ion: (!bonded.has(i) && a.written < 0 && !element(a.el).ionic) ? -1 : 0 })), adj, charge };
