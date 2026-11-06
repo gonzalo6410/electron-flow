@@ -22,7 +22,7 @@ export function attachEditor(api) {
     pointer.set(((event.clientX - rect.left) / rect.width) * 2 - 1, -((event.clientY - rect.top) / rect.height) * 2 + 1);
     raycaster.setFromCamera(pointer, api.camera);
     const hit = raycaster.intersectObjects(api.atomMeshes(), false)[0];
-    return hit ? hit.object.userData.index : null;
+    return hit ? hit.object.userData.atom : null;
   }
 
   function select(i) {
