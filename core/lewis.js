@@ -68,11 +68,12 @@ export function enumerate(node) {
   // tried when the octet leaves no other way. Trying zeros everywhere, as before, made fused rings
   // take seconds to minutes.
   const bondableCount = bondable.filter(Boolean).length;
+  const smallRing = smallRingAtoms(n, edges, bondable, 7); // ring rule, see below; also prunes the search
   let found = [];
   let S = sBound;
   outer: for (; S >= 0; S--) {
     for (let cuts = 0; cuts <= bondableCount; cuts++) {
-      found = searchOrders(n, els, edges, maxOrder, bondable, S, cuts);
+      found = searchOrders(n, els, edges, maxOrder, bondable, S, cuts, smallRing);
       if (found.length) break outer;
     }
   }
@@ -102,7 +103,6 @@ export function enumerate(node) {
   // triple bond), because such an atom would be linear and a small ring cannot hold it. This removes
   // the pyridine structures with C=N(+)=C in the ring. Checked against the geometry of the node, not
   // the structure: resonance locks nothing in (item 11), so every contributor must fit the same ring.
-  const smallRing = smallRingAtoms(n, edges, bondable, 7);
   if (smallRing.size) {
     const fits = s => {
       const pi = new Array(n).fill(0);
@@ -196,62 +196,60 @@ function smallRingAtoms(n, edges, bondable, maxSize) {
 }
 
 // All bond-order assignments with total exactly S, at most `maxZeros` bondable edges at order 0,
-// respecting per-atom ceilings. Edges are visited atom by atom so an atom's limit bites early, and two
-// bounds prune: the most the remaining edges could still add, and the least they must add.
-function searchOrders(n, els, edges, maxOrder, bondable, S, maxZeros) {
+// respecting per-atom ceilings. At each step the edge with the fewest remaining choices is assigned
+// next (a forced edge first), and two bounds prune: the most the remaining edges could still add, and
+// the least they must add.
+function searchOrders(n, els, edges, maxOrder, bondable, S, maxZeros, smallRing) {
   const m = edges.length;
-  // visit order: breadth first from the atom with most edges, each atom's edges together
-  const edgesAt = Array.from({ length: n }, () => []);
-  edges.forEach(([i, j], k) => { edgesAt[i].push(k); edgesAt[j].push(k); });
-  const order = [];
-  const listed = new Array(m).fill(false);
-  const seen = new Array(n).fill(false);
-  const starts = [...Array(n).keys()].sort((a, b) => edgesAt[b].length - edgesAt[a].length);
-  for (const s0 of starts) {
-    if (seen[s0]) continue;
-    const queue = [s0]; seen[s0] = true;
-    while (queue.length) {
-      const i = queue.shift();
-      for (const k of edgesAt[i]) {
-        if (!listed[k]) { listed[k] = true; order.push(k); }
-        const j = edges[k][0] === i ? edges[k][1] : edges[k][0];
-        if (!seen[j]) { seen[j] = true; queue.push(j); }
-      }
-    }
-  }
   const capOf = i => Math.floor(els[i].ceiling / 2);
   const used = new Array(n).fill(0);
+  const piAt = new Array(n).fill(0); // pi parts already placed at each atom
   const orders = new Array(m).fill(0);
+  const assigned = new Array(m).fill(false);
+  // an atom in a small ring may carry at most one pi part (the ring rule), so its bonds top out lower
+  const topFor = (k, i, j) => {
+    let t = Math.min(maxOrder[k], capOf(i) - used[i], capOf(j) - used[j]);
+    if (smallRing.has(i)) t = Math.min(t, 1 + Math.max(0, 1 - piAt[i]));
+    if (smallRing.has(j)) t = Math.min(t, 1 + Math.max(0, 1 - piAt[j]));
+    return t;
+  };
   const results = [];
   const LIMIT = 20000; // more structures than this is not a teaching molecule
 
-  function rec(q, sum, zeros) {
+  function rec(left, sum, zeros) {
     if (results.length >= LIMIT) return;
     if (sum > S) return;
-    // bounds from the edges still to assign
-    let most = 0, mustHave = 0;
-    for (let t = q; t < order.length; t++) {
-      const k = order[t];
+    if (left === 0) { if (sum === S) results.push([...orders]); return; }
+    // bounds from the edges still to assign, and the edge with the fewest choices goes next
+    let most = 0, mustHave = 0, pick = -1, pickChoices = Infinity;
+    for (let k = 0; k < m; k++) {
+      if (assigned[k]) continue;
       const [i, j] = edges[k];
-      const top = Math.min(maxOrder[k], capOf(i) - used[i], capOf(j) - used[j]);
-      most += Math.max(0, top);
+      const top = topFor(k, i, j);
+      const low = bondable[k] && zeros >= maxZeros ? 1 : 0;
+      if (top < low) return;
+      most += top;
       if (bondable[k]) mustHave++;
+      const choices = top - low;
+      if (choices < pickChoices) { pickChoices = choices; pick = k; }
     }
     if (sum + most < S) return;
     if (sum + Math.max(0, mustHave - (maxZeros - zeros)) > S) return;
-    if (q === order.length) { if (sum === S) results.push([...orders]); return; }
-    const k = order[q];
+    const k = pick;
     const [i, j] = edges[k];
-    const top = Math.min(maxOrder[k], capOf(i) - used[i], capOf(j) - used[j], S - sum);
+    const top = Math.min(topFor(k, i, j), S - sum);
     const low = bondable[k] && zeros >= maxZeros ? 1 : 0;
+    assigned[k] = true;
     for (let o = top; o >= low; o--) {
-      orders[k] = o; used[i] += o; used[j] += o;
-      rec(q + 1, sum + o, zeros + (bondable[k] && o === 0 ? 1 : 0));
-      used[i] -= o; used[j] -= o;
+      const pi = Math.max(0, o - 1);
+      orders[k] = o; used[i] += o; used[j] += o; piAt[i] += pi; piAt[j] += pi;
+      rec(left - 1, sum + o, zeros + (bondable[k] && o === 0 ? 1 : 0));
+      used[i] -= o; used[j] -= o; piAt[i] -= pi; piAt[j] -= pi;
     }
     orders[k] = 0;
+    assigned[k] = false;
   }
-  rec(0, 0, 0);
+  rec(m, 0, 0);
   return results;
 }
 
