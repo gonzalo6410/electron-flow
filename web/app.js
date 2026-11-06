@@ -84,6 +84,20 @@ function dashed(a, b, radius, material, group) {
   }
 }
 
+// a hashed line: thin discs across the axis, for a pair of atoms adjacent but unbonded in this structure
+function hashed(a, b, radius, material, group) {
+  const d = b.clone().sub(a);
+  const L = d.length();
+  const step = 0.14;
+  const n = Math.max(2, Math.floor(L / step));
+  const start = (L - (n - 1) * step) / 2;
+  const u = d.normalize();
+  for (let k = 0; k < n; k++) {
+    const p = a.clone().addScaledVector(u, start + k * step);
+    group.add(cylinder(p.clone().addScaledVector(u, -0.012), p.clone().addScaledVector(u, 0.012), radius, material));
+  }
+}
+
 // ---------- sprites (always face the camera) ----------
 function canvasSprite(draw, width, height, opacity = 1, depthTest = true) {
   const c = document.createElement('canvas');
@@ -199,12 +213,13 @@ function load(entry) {
   if (entry.kind === 'case') ({ node, r } = runCase(entry.c));
   else { node = buildNode(nodeFromSmiles(entry.smiles)); r = enumerate(node); }
   const geo = relax(node, r);
-  const { families } = structureFamilies(node, r);
   // the main structure: least total formal charge, first one on a tie (all weights are equal; this
-  // only picks what to show when resonance is switched off)
+  // only picks what to show when resonance is switched off, and which family comes first)
   const spread = st => st.charge.reduce((s, q) => s + Math.abs(q), 0);
   let main = 0;
   r.structures.forEach((st, q) => { if (spread(st) < spread(r.structures[main])) main = q; });
+  const families = structureFamilies(node, r).families
+    .sort((a, b) => (spread(r.structures[a[0]]) - spread(r.structures[b[0]])) || (b.length - a.length) || (a[0] - b[0]));
   current = { node, r, geo, families, main };
   familyIdx = 0; memberIdx = 0; fade = null;
   lastSwitch = performance.now();
@@ -244,7 +259,10 @@ function buildStructure() {
   const pos = geo.pos.map(p => new THREE.Vector3(...p));
   const sym = node.atoms.map(a => a.el);
   const frame = piFrame(node, r, geo.pos, geo.groups, st);
-  const bondMat = solid(0x3a3a3a), ghostMat = solid(0xd0d0d0), ionMat = solid(0xc8c8c8);
+  const bondMat = solid(0x3a3a3a), ghostMat = solid(0x9a9a9a), ionMat = solid(0xc8c8c8);
+
+  // every part gets a key; parts with the same key in two structures are the same picture
+  const part = (key, fn) => { const sub = new THREE.Group(); sub.userData.key = key; fn(sub); g.add(sub); };
 
   r.edges.forEach(([i, j], k) => {
     const o = st.orders[k];
@@ -253,8 +271,10 @@ function buildStructure() {
     const a2 = a.clone().addScaledVector(bd, atomRadius(sym[i]) * 0.9);
     const b2 = b.clone().addScaledVector(bd, -atomRadius(sym[j]) * 0.9);
     if (o <= 1e-9) {
-      if (node.fixed[i] || node.fixed[j]) dashed(a2, b2, 0.03, ionMat, g);
-      else g.add(cylinder(a2, b2, 0.04, ghostMat));
+      part(`edge:${k}:0`, sub => {
+        if (node.fixed[i] || node.fixed[j]) dashed(a2, b2, 0.03, ionMat, sub);
+        else hashed(a2, b2, 0.085, ghostMat, sub);
+      });
       return;
     }
     // lines side by side in the plane of the molecule (across the p orbitals), extra lines toward
@@ -276,36 +296,87 @@ function buildStructure() {
       }
       if (toward.dot(side) < 0) side.negate();
     }
-    for (let q = 0; q < lines; q++) {
-      const shift = side.clone().multiplyScalar(0.17 * (q - (lines - 1) / 2));
-      const pa = a2.clone().add(shift), pb = b2.clone().add(shift);
-      if (q === lines - 1 && fr > 1e-9) dashed(pa, pb, 0.055, bondMat, g);
-      else g.add(cylinder(pa, pb, 0.07, bondMat));
-    }
+    part(`edge:${k}:${o.toFixed(3)}:${side.x.toFixed(2)},${side.y.toFixed(2)},${side.z.toFixed(2)}`, sub => {
+      for (let q = 0; q < lines; q++) {
+        const shift = side.clone().multiplyScalar(0.17 * (q - (lines - 1) / 2));
+        const pa = a2.clone().add(shift), pb = b2.clone().add(shift);
+        if (q === lines - 1 && fr > 1e-9) dashed(pa, pb, 0.055, bondMat, sub);
+        else sub.add(cylinder(pa, pb, 0.07, bondMat));
+      }
+    });
   });
 
-  // lone pairs: laid out around the atom in the plane of the screen, every frame (placeSprites)
+  // lone pairs: each pair gets a fixed direction in space (the in-plane slots and the partner
+  // directions from the pi frame; pairs that would sit above or below the plane are put in the
+  // widest gaps between the bonds in the plane instead, as dots on a drawing would be); every frame
+  // that direction is projected onto the screen, so the dots move smoothly as the molecule turns
   sym.forEach((el, i) => {
     if (node.fixed[i]) return;
     const pairs = st.lone[i] / 2;
     const whole = Math.floor(pairs + 1e-9);
-    const partners = frame.lonePairs[i].filter(lp => lp.kind === 'partner').map(lp => lp.partner);
-    const count = frame.lonePairs[i].length;
-    for (let q = 0; q < count; q++) {
-      const sp = pairSprite(q < whole ? 1 : Math.max(0.2, pairs - whole));
-      g.add(sp);
-      tracked.push({ sprite: sp, index: i, kind: 'pair', q, count, partners, group: g });
-    }
+    const lps = frame.lonePairs[i];
+    if (!lps.length) return;
+    const dirs = drawingDirections(i, lps, frame, pos);
+    const partners = lps.filter(lp => lp.kind === 'partner').map(lp => lp.partner);
+    part(`pairs:${i}:${st.lone[i]}:${partners.join(',')}`, sub => {
+      dirs.forEach((dir, q) => {
+        const sp = pairSprite(q < whole ? 1 : Math.max(0.2, pairs - whole));
+        sub.add(sp);
+        tracked.push({ sprite: sp, index: i, kind: 'pair', dir, angle: null, group: g });
+      });
+    });
   });
 
   // charges
   sym.forEach((el, i) => {
     if (Math.abs(st.charge[i]) < 1e-9) return;
-    const sp = chargeSprite(chargeMark(st.charge[i]));
-    g.add(sp);
-    tracked.push({ sprite: sp, index: i, kind: 'charge', group: g });
+    part(`charge:${i}:${st.charge[i]}`, sub => {
+      const sp = chargeSprite(chargeMark(st.charge[i]));
+      sub.add(sp);
+      tracked.push({ sprite: sp, index: i, kind: 'charge', group: g });
+    });
   });
   return g;
+}
+
+// directions in space for an atom's dot pairs
+function drawingDirections(i, lps, frame, pos) {
+  const kept = lps.filter(lp => lp.kind !== 'p' && lp.kind !== 'free').map(lp => new THREE.Vector3(...lp.dir));
+  const need = lps.length - kept.length;
+  if (!need) return kept;
+  const bonds = current.geo.groups[i].nbrs.map(nb => pos[nb.j].clone().sub(pos[i]).normalize());
+  const extra = [];
+  const pO = frame.pOrbital[i];
+  if (pO && bonds.length >= 2) {
+    // in the plane of the atom, in the widest gaps between its bonds and the pairs already placed
+    const nrm = new THREE.Vector3(...pO);
+    const ex = bonds[0].clone().addScaledVector(nrm, -bonds[0].dot(nrm)).normalize();
+    const ey = nrm.clone().cross(ex);
+    const placed = [...bonds, ...kept];
+    for (let q = 0; q < need; q++) {
+      const angles = placed.map(v => Math.atan2(v.dot(ey), v.dot(ex))).sort((a, b) => a - b);
+      let best = { mid: 0, size: -1 };
+      for (let k = 0; k < angles.length; k++) {
+        const a = angles[k], b = k + 1 < angles.length ? angles[k + 1] : angles[0] + 2 * Math.PI;
+        if (b - a > best.size) best = { mid: (a + b) / 2, size: b - a };
+      }
+      const v = ex.clone().multiplyScalar(Math.cos(best.mid)).addScaledVector(ey, Math.sin(best.mid));
+      extra.push(v); placed.push(v);
+    }
+  } else {
+    // nothing flat to go by: spread them away from the bonds
+    let away = bonds.reduce((s, v) => s.add(v), new THREE.Vector3()).negate();
+    if (away.length() < 1e-6) away.set(0, 1, 0);
+    away.normalize();
+    const p1 = Math.abs(away.x) < 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0);
+    p1.addScaledVector(away, -p1.dot(away)).normalize();
+    const p2 = away.clone().cross(p1);
+    for (let q = 0; q < need; q++) {
+      const ang = (2 * Math.PI * q) / need;
+      extra.push(away.clone().addScaledVector(p1, 0.7 * Math.cos(ang)).addScaledVector(p2, 0.7 * Math.sin(ang)).normalize());
+    }
+  }
+  return [...kept, ...extra];
 }
 
 function setOpacity(group, f) {
@@ -316,19 +387,33 @@ function dropTracked(group) {
   for (let k = tracked.length - 1; k >= 0; k--) if (tracked[k].group === group) tracked.splice(k, 1);
 }
 
+function finishFade() {
+  if (!fade) return;
+  scene.remove(fade.from); dropTracked(fade.from);
+  fade.to.children.forEach(c => { c.visible = true; });
+  setOpacity(fade.to, 1);
+  structureGroup = fade.to;
+  fade = null;
+}
+
+// Replace the picture. With animate, parts that are the same in both structures stay as they are;
+// a part that goes fades out while the part that replaces it fades in, in place.
 function swapStructure(next, animate) {
-  if (fade) { // a fade still running is finished on the spot
-    scene.remove(fade.from); dropTracked(fade.from);
-    structureGroup = fade.to; setOpacity(structureGroup, 1); fade = null;
-  }
+  finishFade();
   if (!animate) {
     scene.remove(structureGroup); dropTracked(structureGroup);
     structureGroup = next; scene.add(next);
     return;
   }
-  setOpacity(next, 0);
+  const oldKeys = new Set(structureGroup.children.map(c => c.userData.key));
+  const newKeys = new Set(next.children.map(c => c.userData.key));
+  const going = structureGroup.children.filter(c => !newKeys.has(c.userData.key));
+  const coming = next.children.filter(c => !oldKeys.has(c.userData.key));
+  // parts common to both: the old copy goes now, the new copy shows at once
+  structureGroup.children.filter(c => newKeys.has(c.userData.key)).forEach(c => { c.visible = false; });
+  coming.forEach(c => { setOpacity(c, 0); c.visible = true; });
   scene.add(next);
-  fade = { from: structureGroup, to: next, start: performance.now() };
+  fade = { from: structureGroup, to: next, going, coming, start: performance.now() };
 }
 
 function showStructure(animate) {
@@ -338,37 +423,9 @@ function showStructure(animate) {
 
 // ---------- per-frame sprite placement ----------
 const camRight = new THREE.Vector3(), camUp = new THREE.Vector3(), camBack = new THREE.Vector3();
-const angleCache = new Map();
-
-// screen-plane angles for an atom's dot pairs: pairs that belong to a missing or half bond point at
-// their partner, the rest go into the widest gaps between the bonds as seen from the camera
-function pairAngles(i, count, partners) {
-  const key = `${i}:${count}:${partners.join(',')}`;
-  if (angleCache.has(key)) return angleCache.get(key);
-  const pos = current.geo.pos;
-  const p = new THREE.Vector3(...pos[i]);
-  const angleOf = j => { const v = new THREE.Vector3(...pos[j]).sub(p); const x = v.dot(camRight), y = v.dot(camUp); return Math.hypot(x, y) > 0.25 ? Math.atan2(y, x) : null; };
-  const taken = [];
-  for (const nb of current.geo.groups[i].nbrs) { const a = angleOf(nb.j); if (a !== null) taken.push(a); }
-  for (const j of current.geo.groups[i].assoc) { const a = angleOf(j); if (a !== null) taken.push(a); }
-  const out = partners.map(j => angleOf(j) ?? 0);
-  while (out.length < count) {
-    const all = [...taken, ...out].sort((a, b) => a - b);
-    if (!all.length) { out.push(Math.PI / 2); continue; }
-    let best = { mid: 0, size: -1 };
-    for (let q = 0; q < all.length; q++) {
-      const a = all[q], b = q + 1 < all.length ? all[q + 1] : all[0] + 2 * Math.PI;
-      if (b - a > best.size) best = { mid: (a + b) / 2, size: b - a };
-    }
-    out.push(best.mid);
-  }
-  angleCache.set(key, out);
-  return out;
-}
 
 function placeSprites() {
   camera.matrixWorld.extractBasis(camRight, camUp, camBack);
-  angleCache.clear();
   const pos = current.geo.pos;
   const toCam = new THREE.Vector3();
   for (const t of tracked) {
@@ -378,8 +435,9 @@ function placeSprites() {
     if (t.kind === 'symbol') {
       t.sprite.position.copy(p).addScaledVector(toCam, rad * 1.25);
     } else if (t.kind === 'pair') {
-      const a = pairAngles(t.index, t.count, t.partners)[t.q];
-      t.sprite.position.copy(p).addScaledVector(toCam, rad * 1.1).addScaledVector(camRight, Math.cos(a) * (rad + 0.2)).addScaledVector(camUp, Math.sin(a) * (rad + 0.2));
+      const x = t.dir.dot(camRight), y = t.dir.dot(camUp);
+      if (Math.hypot(x, y) > 0.2 || t.angle === null) t.angle = Math.atan2(y, x);
+      t.sprite.position.copy(p).addScaledVector(toCam, rad * 1.1).addScaledVector(camRight, Math.cos(t.angle) * (rad + 0.2)).addScaledVector(camUp, Math.sin(t.angle) * (rad + 0.2));
     } else {
       t.sprite.position.copy(p).addScaledVector(toCam, rad).addScaledVector(camRight, rad * 0.95 + 0.08).addScaledVector(camUp, rad * 0.85 + 0.06);
     }
@@ -464,11 +522,10 @@ function animate(t) {
   if (current) {
     if (fade) {
       const f = Math.min(1, (t - fade.start) / FADE);
-      const outPart = Math.min(1, f * 2), inPart = Math.max(0, f * 2 - 1); // old goes, then new comes
-      const ease = x => x * x * (3 - 2 * x);
-      setOpacity(fade.from, 1 - ease(outPart));
-      setOpacity(fade.to, ease(inPart));
-      if (f >= 1) { scene.remove(fade.from); dropTracked(fade.from); structureGroup = fade.to; fade = null; }
+      const e = f * f * (3 - 2 * f);
+      fade.going.forEach(c => setOpacity(c, 1 - e));
+      fade.coming.forEach(c => setOpacity(c, e));
+      if (f >= 1) finishFade();
     }
     const family = current.families[familyIdx];
     if (showResonance && family.length > 1 && !fade && t - lastSwitch > DWELL) {
