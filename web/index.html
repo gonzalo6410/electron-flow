@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Electron Flow</title>
+<style>
+  html, body { margin: 0; height: 100%; font-family: Helvetica, Arial, sans-serif; color: #000; background: #fff; }
+  body { display: flex; }
+  #panel { width: 300px; min-width: 300px; padding: 14px 16px; box-sizing: border-box; overflow-y: auto; border-right: 1px solid #ddd; font-size: 14px; line-height: 1.35; }
+  #view { flex: 1; position: relative; }
+  canvas { display: block; }
+  h1 { font-size: 16px; font-weight: normal; margin: 0 0 12px 0; }
+  h2 { font-size: 13px; font-weight: normal; margin: 16px 0 4px 0; color: #444; }
+  select, button { font: inherit; color: #000; background: #fff; border: 1px solid #999; padding: 3px 8px; margin: 0 4px 4px 0; }
+  button.on { background: #000; color: #fff; border-color: #000; }
+  table { border-collapse: collapse; width: 100%; }
+  td { padding: 1px 6px 1px 0; vertical-align: top; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  #status { margin-top: 8px; }
+  .small { font-size: 12px; color: #444; }
+  #hint { position: absolute; left: 10px; bottom: 8px; font-size: 12px; color: #666; }
+</style>
+<script type="importmap">
+{ "imports": { "three": "./vendor/three.module.js" } }
+</script>
+</head>
+<body>
+  <div id="panel">
+    <h1>Electron Flow</h1>
+    <div>
+      <select id="case"></select>
+    </div>
+    <div style="margin-top:8px">
+      <button id="btn-cycle" class="on">one structure at a time</button>
+      <button id="btn-avg">weighted average</button>
+    </div>
+    <div id="status"></div>
+    <h2>atoms</h2>
+    <table id="atoms"></table>
+    <h2>bonds</h2>
+    <table id="bonds"></table>
+    <p class="small" id="rules"></p>
+  </div>
+  <div id="view"><div id="hint">drag to orbit, wheel to zoom, right-drag to pan</div></div>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
