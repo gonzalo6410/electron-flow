@@ -6,7 +6,7 @@ import { COMPOUNDS } from './core/compounds.js';
 import { nodeFromSmiles } from './core/smiles.js';
 import { buildNode, enumerate } from './core/lewis.js';
 import { relax } from './core/geometry.js';
-import { piFrame } from './core/pi.js';
+import { piFrame, repulsion } from './core/pi.js';
 import { ELEMENTS } from './core/elements.js';
 import { structureFamilies } from './core/symmetry.js';
 
@@ -146,6 +146,7 @@ function pairSprite(opacity = 1) {
 // ---------- state ----------
 let current = null;   // {c, node, r, geo, lpDirs}
 let mode = 'cycle';
+let drawStyle = 'lewis'; // 'lewis' or 'orbital'
 let familyIdx = 0;   // which family of equivalent structures is shown (stepped by hand)
 let memberIdx = 0;   // which member of the family (cycles on its own)
 let lastSwitch = 0;
@@ -252,6 +253,7 @@ function buildAtoms() {
 }
 
 function buildStructure(pic) {
+  const style = drawStyle;
   const g = new THREE.Group();
   const { node, r, geo } = current;
   const pos = geo.pos;
@@ -275,43 +277,99 @@ function buildStructure(pic) {
       else g.add(cylinder(a2.toArray(), b2.toArray(), 0.04, ghostMat));
       return;
     }
-    // sigma part: solid if whole, dashed if partial
-    if (o >= 1 - 1e-9) g.add(cylinder(a2.toArray(), b2.toArray(), 0.07, bondMat));
-    else dashed(a2.toArray(), b2.toArray(), 0.06, bondMat, g);
-    // pi parts: a translucent lobe above and below, along the p orbitals; fainter when partial
-    frame.normals[k].forEach((nrm, q) => {
-      const amount = Math.min(1, o - 1 - q);
-      if (amount <= 1e-9) return;
-      const mid = a2.clone().add(b2).multiplyScalar(0.5);
-      const L = a2.distanceTo(b2);
-      const nv = new THREE.Vector3(...nrm);
-      const mat = new THREE.MeshLambertMaterial({ color: 0x5577aa, transparent: true, opacity: 0.22 + 0.3 * amount, depthWrite: false });
-      for (const side of [1, -1]) {
-        const lobe = new THREE.Mesh(sphereGeo, mat);
-        lobe.userData.baseOpacity = 0.22 + 0.3 * amount;
-        lobe.renderOrder = 1;
-        lobe.position.copy(mid).add(nv.clone().multiplyScalar(0.24 * side));
-        lobe.scale.set(0.17, L * 0.46, 0.15);
-        // y axis along the bond, z axis along the p orbital
-        const m = new THREE.Matrix4().makeBasis(bd.clone().cross(nv).normalize(), bd.clone(), nv.clone()); // right-handed: x = y cross z
-        lobe.quaternion.setFromRotationMatrix(m);
-        g.add(lobe);
+    if (style === 'orbital') {
+      // sigma part a rod, solid if whole, dashed if partial
+      if (o >= 1 - 1e-9) g.add(cylinder(a2.toArray(), b2.toArray(), 0.07, bondMat));
+      else dashed(a2.toArray(), b2.toArray(), 0.06, bondMat, g);
+      // each pi part a translucent lobe above and below, along the p orbitals; fainter when partial
+      frame.normals[k].forEach((nrm, q) => {
+        const amount = Math.min(1, o - 1 - q);
+        if (amount <= 1e-9) return;
+        const mid = a2.clone().add(b2).multiplyScalar(0.5);
+        const L = a2.distanceTo(b2);
+        const nv = new THREE.Vector3(...nrm);
+        const mat = new THREE.MeshLambertMaterial({ color: 0x5577aa, transparent: true, opacity: 0.22 + 0.3 * amount, depthWrite: false });
+        for (const side of [1, -1]) {
+          const lobe = new THREE.Mesh(sphereGeo, mat);
+          lobe.userData.baseOpacity = 0.22 + 0.3 * amount;
+          lobe.renderOrder = 1;
+          lobe.position.copy(mid).add(nv.clone().multiplyScalar(0.24 * side));
+          lobe.scale.set(0.17, L * 0.46, 0.15);
+          const m = new THREE.Matrix4().makeBasis(bd.clone().cross(nv).normalize(), bd.clone(), nv.clone()); // right-handed: x = y cross z
+          lobe.quaternion.setFromRotationMatrix(m);
+          g.add(lobe);
+        }
+      });
+      return;
+    }
+    // Lewis style: one line per whole order plus a dashed line for a fraction, side by side in the
+    // plane of the molecule (the in-plane perpendicular to the p orbitals), extra lines toward the
+    // neighbours (inside a ring)
+    const full = Math.floor(o + 1e-9), fr = o - full;
+    const lines = full + (fr > 1e-9 ? 1 : 0);
+    let side;
+    if (frame.normals[k].length) side = bd.clone().cross(new THREE.Vector3(...frame.normals[k][0])).normalize();
+    else {
+      const ref = Math.abs(bd.x) < 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0);
+      side = ref.sub(bd.clone().multiplyScalar(ref.dot(bd))).normalize();
+    }
+    if (lines > 1) {
+      const mid = a.clone().add(b).multiplyScalar(0.5);
+      let toward = new THREE.Vector3();
+      for (const [p, q] of r.edges) {
+        const other = p === i ? q : q === i ? p : p === j ? q : q === j ? p : -1;
+        if (other < 0 || other === i || other === j) continue;
+        toward.add(new THREE.Vector3(...pos[other]).sub(mid));
       }
-    });
+      if (toward.dot(side) < 0) side.negate();
+    }
+    const off = side.multiplyScalar(0.17);
+    for (let q = 0; q < lines; q++) {
+      const shift = off.clone().multiplyScalar(q - (lines - 1) / 2);
+      const pa = a2.clone().add(shift).toArray(), pb = b2.clone().add(shift).toArray();
+      const partial = q === lines - 1 && fr > 1e-9;
+      if (partial) dashed(pa, pb, 0.055, bondMat, g);
+      else g.add(cylinder(pa, pb, 0.07, bondMat));
+    }
   });
 
-  // lone pairs: whole pairs full, a fractional pair faded; directions from the pi frame
+  // lone pairs: whole pairs full, a fractional pair faded. Orbital style places them in their
+  // orbitals; Lewis style keeps the in-plane and partner placements but spreads the p-orbital pairs
+  // around the atom by repulsion, as dots on a drawing would be
   sym.forEach((el, i) => {
     if (node.fixed[i]) return;
     const rad = atomRadius(el);
     const pairs = pic.lone[i] / 2;
     const whole = Math.floor(pairs + 1e-9);
-    frame.lonePairs[i].forEach((lp, q) => {
+    let lps = frame.lonePairs[i];
+    if (style === 'lewis' && lps.some(lp => lp.kind === 'p' || lp.kind === 'free')) {
+      const kept = lps.filter(lp => lp.kind !== 'p' && lp.kind !== 'free');
+      const need = lps.length - kept.length;
+      const bonds = geo.groups[i].nbrs.map(nb => new THREE.Vector3(...pos[nb.j]).sub(new THREE.Vector3(...pos[i])).normalize());
+      let extra = [];
+      const pO = frame.pOrbital[i];
+      if (pO && bonds.length >= 2) {
+        // in the plane, in the widest gaps between the bonds, as dots on a drawing
+        const nrm = new THREE.Vector3(...pO);
+        const ex = bonds[0].clone().sub(nrm.clone().multiplyScalar(bonds[0].dot(nrm))).normalize();
+        const ey = nrm.clone().cross(ex);
+        const angles = [...bonds, ...kept.map(lp => new THREE.Vector3(...lp.dir))].map(v => Math.atan2(v.dot(ey), v.dot(ex))).sort((a, b) => a - b);
+        const gaps = angles.map((a, q) => { const b = q + 1 < angles.length ? angles[q + 1] : angles[0] + 2 * Math.PI; return { mid: (a + b) / 2, size: b - a }; }).sort((a, b) => b.size - a.size);
+        for (let q = 0; q < need && q < gaps.length; q++) {
+          const v = ex.clone().multiplyScalar(Math.cos(gaps[q].mid)).add(ey.clone().multiplyScalar(Math.sin(gaps[q].mid)));
+          extra.push({ dir: v.toArray(), kind: 'free', far: true });
+        }
+      }
+      if (extra.length < need) extra.push(...repulsion(bonds.map(b => b.toArray()), [...kept, ...extra].map(lp => lp.dir), need - extra.length).map(dir => ({ dir, kind: 'free' })));
+      lps = [...kept, ...extra];
+    }
+    lps.forEach((lp, q) => {
       const opacity = q < whole ? 1 : Math.max(0.2, pairs - whole);
       const sp = pairSprite(opacity);
       sp.userData.baseOpacity = opacity;
       const d = lp.dir;
-      sp.position.set(pos[i][0] + d[0] * (rad + 0.17), pos[i][1] + d[1] * (rad + 0.17), pos[i][2] + d[2] * (rad + 0.17));
+      const out = rad + (lp.far ? 0.3 : 0.17);
+      sp.position.set(pos[i][0] + d[0] * out, pos[i][1] + d[1] * out, pos[i][2] + d[2] * out);
       g.add(sp);
     });
   });
@@ -443,6 +501,15 @@ function setMode(m) {
 }
 bCycle.addEventListener('click', () => setMode('cycle'));
 bAvg.addEventListener('click', () => setMode('average'));
+const bLewis = document.getElementById('btn-lewis'), bOrb = document.getElementById('btn-orbital');
+function setStyle(st) {
+  drawStyle = st;
+  bLewis.classList.toggle('on', st === 'lewis');
+  bOrb.classList.toggle('on', st === 'orbital');
+  if (current) { swapStructure(buildStructure(picture()), true); }
+}
+bLewis.addEventListener('click', () => setStyle('lewis'));
+bOrb.addEventListener('click', () => setStyle('orbital'));
 document.getElementById('prev').addEventListener('click', () => stepFamily(-1));
 document.getElementById('next').addEventListener('click', () => stepFamily(1));
 window.addEventListener('keydown', e => {

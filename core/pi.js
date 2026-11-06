@@ -182,7 +182,7 @@ export function piFrame(node, result, pos, groups, pic) {
 }
 
 // unit vectors keeping away from the given directions and each other
-function repulsion(avoid, existing, count) {
+export function repulsion(avoid, existing, count) {
   let dirs = [];
   let mean = avoid.concat(existing).reduce((s, v) => add(s, v), [0, 0, 0]);
   const away = len(mean) > 1e-6 ? scale(norm(mean), -1) : [0, 0, 1];
