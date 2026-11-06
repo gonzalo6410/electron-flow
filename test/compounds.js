@@ -28,4 +28,17 @@ for (const c of COMPOUNDS) {
   }
 }
 console.log(`relaxation: ${relaxTotal.toFixed(0)} ms over ${COMPOUNDS.length} compounds, slowest ${slowest.name} at ${slowest.ms.toFixed(1)} ms`);
+
+// bigger conjugated molecules a student may type must stay quick: before the search pruned by the
+// bond order each atom can still carry, the trityl cation took five minutes
+for (const [name, smiles] of [['triphenylmethyl cation', '[C+](c1ccccc1)(c2ccccc2)c3ccccc3.[Cl-]'], ['tetraphenylborate', '[B-](c1ccccc1)(c2ccccc2)(c3ccccc3)c4ccccc4.[Na+]'], ['anthracene', 'c1ccc2cc3ccccc3cc2c1']]) {
+  const t0 = performance.now();
+  const node = buildNode(nodeFromSmiles(smiles));
+  const r = enumerate(node);
+  const ms = performance.now() - t0;
+  const ok = ms < 2000;
+  if (!ok) bad++;
+  console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}: ${r.structures.length} structures in ${ms.toFixed(0)} ms${ok ? '' : ' (too slow)'}`);
+}
+
 console.log(bad ? `${bad} problem(s)` : 'all compounds run');

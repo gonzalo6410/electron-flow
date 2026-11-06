@@ -57,5 +57,23 @@ for (const name of ['nitrous oxide', 'carbon dioxide', 'formamide', 'acetate', '
     if (ang !== '90') bad++;
   }
 }
+// a triple bond with no flat atom at either end lines up with the pi system across the single bond:
+// vinylacetylene's C#C has one pi part parallel to the C=C pi part, benzonitrile's C#N one parallel
+// to the ring's; before this rule the three lines of such a triple bond were drawn at a random angle
+{
+  const { nodeFromSmiles } = await import('../core/smiles.js');
+  for (const [name, s] of [['vinylacetylene', 'C=CC#C'], ['benzonitrile', 'N#Cc1ccccc1'], ['diacetylene', 'C#CC#C']]) {
+    const node = buildNode(nodeFromSmiles(s)); const r = enumerate(node);
+    const st = r.structures.find(x => x.charge.every(q => q === 0)) || r.structures[0];
+    const geo = relax(node, r);
+    const f = piFrame(node, r, geo.pos, geo.groups, { orders: st.orders, lone: st.lone });
+    const multi = r.edges.map((e, k) => k).filter(k => st.orders[k] > 1);
+    let widest = 0; // largest angle between the first normals of any two multiple bonds
+    multi.forEach((a, q) => multi.slice(q + 1).forEach(b => { widest = Math.max(widest, Number(deg(Math.abs(dot(f.normals[a][0], f.normals[b][0]))))); }));
+    const ok = widest < 1;
+    console.log(`== ${name}: ${multi.length} multiple bonds, first normals at most ${widest} degrees apart`);
+    if (!ok) bad++;
+  }
+}
 console.log(bad ? `${bad} problem(s)` : 'pi frame checks pass');
 process.exit(bad ? 1 : 0);

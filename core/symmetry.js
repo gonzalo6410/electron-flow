@@ -6,49 +6,123 @@
 // the viewer cycles through them on its own; families are stepped through by hand (ledger item 13).
 //
 // Hydrogens that are plain (one single bond, no lone electrons, no charge, in every structure) are
-// folded into their heavy atom as a count, which keeps the number of symmetries small.
+// folded into their heavy atom as a count, which keeps the graph small.
+//
+// Two structures are compared directly: a search for a relabelling that carries one onto the other,
+// with the bond orders, lone electrons and charges of the two pictures narrowing the choices at every
+// step. The symmetries of the skeleton are never listed, so a molecule with tens of thousands of them
+// (S2F10 has 28800) is grouped exactly; an earlier version listed the first 5000 and split a family
+// in such cases.
 
 export function structureFamilies(node, result) {
+  const graph = reducedGraph(node, result);
+  const sts = result.structures;
+  const { keep, label, pairs } = graph;
+  // a fingerprint no relabelling can change: sorted atom tokens and sorted pair tokens
+  const fingerprint = st => {
+    const atomPart = keep.map(i => `${label(i)}:${st.lone[i]}:${st.charge[i]}`).sort().join('|');
+    const pairPart = pairs.map(([i, j, k]) => [label(i), label(j)].sort().join('~') + ':' + st.orders[k]).sort().join('|');
+    return atomPart + '#' + pairPart;
+  };
+  const reps = new Map(); // fingerprint -> representatives of the families found so far
+  const familyOf = new Array(sts.length);
+  sts.forEach((st, q) => {
+    const fp = fingerprint(st);
+    if (!reps.has(fp)) reps.set(fp, []);
+    const list = reps.get(fp);
+    const match = list.find(rep => carries(graph, sts[rep], st));
+    familyOf[q] = match === undefined ? q : match;
+    if (match === undefined) list.push(q);
+  });
+  const groups = new Map();
+  familyOf.forEach((r, q) => { if (!groups.has(r)) groups.set(r, []); groups.get(r).push(q); });
+  const families = [...groups.values()].sort((a, b) => a[0] - b[0]);
+  return { families };
+}
+
+// The skeleton with plain hydrogens folded in and spectator ions left out. Loosely associated ions
+// must not break the symmetry of the ion they sit by.
+function reducedGraph(node, result) {
   const n = node.atoms.length;
   const sym = node.atoms.map(a => a.el);
   const edges = result.edges;
   const sts = result.structures;
-
-  // which atoms are plain hydrogens
   const edgesAt = Array.from({ length: n }, () => []);
   edges.forEach(([i, j], k) => { edgesAt[i].push(k); edgesAt[j].push(k); });
   const plainH = sym.map((el, i) => el === 'H' && edgesAt[i].length === 1 &&
     sts.every(st => st.orders[edgesAt[i][0]] === 1 && st.lone[i] === 0 && st.charge[i] === 0));
-
-  // reduced graph: non-plain atoms, labelled by element and plain-H count. Loosely associated
-  // cations (group 1 and 2) are left out: they must not break the symmetry of the ion they sit by.
+  const skip = i => plainH[i] || !!node.fixed[i];
   const keep = [];
-  for (let i = 0; i < n; i++) if (!plainH[i] && !node.fixed[i]) keep.push(i);
+  for (let i = 0; i < n; i++) if (!skip(i)) keep.push(i);
   const hCount = new Array(n).fill(0);
   edges.forEach(([i, j]) => { if (plainH[i]) hCount[j]++; if (plainH[j]) hCount[i]++; });
   const label = i => `${sym[i]}/${hCount[i]}`;
   const adj = new Map(keep.map(i => [i, new Set()]));
   const edgeIndex = new Map();
-  const skip = i => plainH[i] || node.fixed[i];
+  const pairs = []; // [i, j, k] for every pair of kept atoms
   edges.forEach(([i, j], k) => {
     if (skip(i) || skip(j)) return;
     adj.get(i).add(j); adj.get(j).add(i);
     edgeIndex.set(`${i}-${j}`, k); edgeIndex.set(`${j}-${i}`, k);
+    pairs.push([i, j, k]);
   });
+  // atoms in breadth-first order from the busiest atom, so each new atom is tied to placed ones
+  const order = [];
+  const placed = new Set();
+  const byDegree = [...keep].sort((a, b) => adj.get(b).size - adj.get(a).size);
+  for (const s of byDegree) {
+    if (placed.has(s)) continue;
+    const queue = [s];
+    placed.add(s);
+    while (queue.length) {
+      const a = queue.shift();
+      order.push(a);
+      for (const b of adj.get(a)) if (!placed.has(b)) { placed.add(b); queue.push(b); }
+    }
+  }
+  return { keep, label, adj, edgeIndex, pairs, order };
+}
 
-  // all symmetries of the reduced graph, by backtracking in degree order
-  const order = [...keep].sort((a, b) => adj.get(b).size - adj.get(a).size);
+// Is there a relabelling of the skeleton that carries structure a onto structure b?
+function carries(graph, a, b) {
+  const { keep, label, adj, edgeIndex, order } = graph;
+  const token = (st, i) => `${label(i)}:${st.lone[i]}:${st.charge[i]}`;
   const perm = new Map(), used = new Set();
-  const autos = [];
-  const LIMIT = 5000;
   function rec(q) {
-    if (autos.length >= LIMIT) return;
-    if (q === order.length) { autos.push(new Map(perm)); return; }
+    if (q === order.length) return true;
+    const i = order[q];
+    for (const j of keep) {
+      if (used.has(j) || token(a, i) !== token(b, j) || adj.get(j).size !== adj.get(i).size) continue;
+      let fine = true;
+      for (const [x, y] of perm) {
+        const joined = adj.get(i).has(x);
+        if (joined !== adj.get(j).has(y)) { fine = false; break; }
+        if (joined && a.orders[edgeIndex.get(`${i}-${x}`)] !== b.orders[edgeIndex.get(`${j}-${y}`)]) { fine = false; break; }
+      }
+      if (!fine) continue;
+      perm.set(i, j); used.add(j);
+      if (rec(q + 1)) return true;
+      used.delete(j); perm.delete(i);
+    }
+    return false;
+  }
+  return rec(0);
+}
+
+// How many relabellings keep the reduced skeleton (elements, hydrogen counts, adjacency). Listed by
+// backtracking up to `limit`; for the tests and the console, the grouping above does not need it.
+export function skeletonSymmetries(node, result, limit = 5000) {
+  const { keep, label, adj, order } = reducedGraph(node, result);
+  const perm = new Map(), used = new Set();
+  let count = 0;
+  function rec(q) {
+    if (count >= limit) return;
+    if (q === order.length) { count++; return; }
     const i = order[q];
     for (const j of keep) {
       if (used.has(j) || label(j) !== label(i) || adj.get(j).size !== adj.get(i).size) continue;
       let fine = true;
-      for (const [a, b] of perm) { if (adj.get(i).has(a) !== adj.get(j).has(b)) { fine = false; break; } }
+      for (const [x, y] of perm) { if (adj.get(i).has(x) !== adj.get(j).has(y)) { fine = false; break; } }
       if (!fine) continue;
       perm.set(i, j); used.add(j);
       rec(q + 1);
@@ -56,32 +130,5 @@ export function structureFamilies(node, result) {
     }
   }
   rec(0);
-
-  // key of a structure after relabelling by p
-  const keyUnder = (st, p) => {
-    const atomPart = keep.map(i => `${p.get(i)}:${st.lone[i]}:${st.charge[i]}`).sort().join('|');
-    const edgePart = edges.map(([i, j], k) => {
-      if (skip(i) || skip(j)) return null;
-      const kk = edgeIndex.get(`${p.get(i)}-${p.get(j)}`);
-      return `${kk}:${st.orders[k]}`;
-    }).filter(Boolean).sort().join('|');
-    return atomPart + '#' + edgePart;
-  };
-  const identity = new Map(keep.map(i => [i, i]));
-  const ownKey = sts.map(st => keyUnder(st, identity));
-  const keyToIdx = new Map(ownKey.map((k, q) => [k, q]));
-
-  // union-find over images
-  const parent = sts.map((_, q) => q);
-  const find = q => (parent[q] === q ? q : (parent[q] = find(parent[q])));
-  sts.forEach((st, q) => {
-    for (const p of autos) {
-      const target = keyToIdx.get(keyUnder(st, p));
-      if (target !== undefined && target !== q) parent[find(target)] = find(q);
-    }
-  });
-  const groups = new Map();
-  sts.forEach((_, q) => { const r = find(q); if (!groups.has(r)) groups.set(r, []); groups.get(r).push(q); });
-  const families = [...groups.values()].sort((a, b) => a[0] - b[0]);
-  return { families, symmetries: autos.length, truncated: autos.length >= LIMIT };
+  return { symmetries: count, truncated: count >= limit };
 }

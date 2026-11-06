@@ -12,6 +12,10 @@ const USUAL_BONDS = { H: 1, B: 3, C: 4, N: 3, O: 2, F: 1, Si: 4, P: 3, S: 2, Cl:
 
 export function emptySpec() { return { atoms: [], adj: [], charge: 0 }; }
 
+// an edited molecule is one pool of electrons with one overall charge: the charges a SMILES wrote on
+// its atoms are dropped, so plus and minus on the page mean what they say
+const plain = atoms => atoms.map(a => (a.ion ? { el: a.el, ion: a.ion } : { el: a.el }));
+
 export function neighbours(spec, i) {
   return spec.adj.filter(([a, b]) => a === i || b === i).map(([a, b]) => (a === i ? b : a));
 }
@@ -19,7 +23,7 @@ export function neighbours(spec, i) {
 // add an atom of element `el` bonded to atom `parent` (or free, when parent is null)
 export function addAtom(spec, el, parent = null) {
   element(el); // throws on an unknown element
-  const atoms = [...spec.atoms, { el }];
+  const atoms = [...plain(spec.atoms), { el }];
   const adj = [...spec.adj];
   const index = atoms.length - 1;
   if (parent !== null) adj.push([parent, index]);
@@ -35,7 +39,7 @@ export function removeAtom(spec, i, withHydrogens = true) {
   const keep = spec.atoms.map((_, k) => !gone.has(k));
   const newIndex = []; let q = 0;
   keep.forEach(k => newIndex.push(k ? q++ : -1));
-  const atoms = spec.atoms.filter((_, k) => keep[k]);
+  const atoms = plain(spec.atoms.filter((_, k) => keep[k]));
   const adj = spec.adj.filter(([a, b]) => keep[a] && keep[b]).map(([a, b]) => [newIndex[a], newIndex[b]]);
   return { atoms, adj, charge: spec.charge, removed: [...gone].sort((a, b) => a - b) };
 }
@@ -47,10 +51,10 @@ export function toggleBond(spec, i, j) {
   const want = key([i, j]);
   const has = spec.adj.some(e => key(e) === want);
   const adj = has ? spec.adj.filter(e => key(e) !== want) : [...spec.adj, [Math.min(i, j), Math.max(i, j)]];
-  return { ...spec, adj };
+  return { atoms: plain(spec.atoms), adj, charge: spec.charge };
 }
 
-export function setCharge(spec, charge) { return { ...spec, charge }; }
+export function setCharge(spec, charge) { return { atoms: plain(spec.atoms), adj: spec.adj, charge }; }
 
 // give every heavy atom its usual number of bonds by adding hydrogens; returns the new spec and the
 // indices of the atoms added, with the parent of each

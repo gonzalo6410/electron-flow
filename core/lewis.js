@@ -18,13 +18,20 @@
 //
 // Group 1 and 2 metals are "ionic": they give their valence electrons to the pool, form no bonds,
 // carry charge +valence, and are not octet counted.
+//
+// Pieces. Atoms joined by adjacency (bonds and the loose ties of spectator ions) form a piece. When
+// the atoms carry the charges they were written with (a molecule read from SMILES), each piece keeps
+// its own electrons: a lone pair cannot jump from an amide in one piece to a carbocation in another,
+// and two methyl radicals written as two pieces stay two radicals. Without written charges (the
+// known-answer cases, built by hand with one overall charge) every piece shares one pool, as before.
 
 import { element } from './elements.js';
 
 export function buildNode({ atoms, adj, charge = 0 }) {
-  // atoms: [{ el: 'C', pos: [x,y,z]?, ion: -1? }], adj: [[i,j], ...], charge: integer
+  // atoms: [{ el: 'C', pos: [x,y,z]?, ion: -1?, written: 0? }], adj: [[i,j], ...], charge: integer
   // ion: -1 marks a spectator anion (a free Cl-, Br-, I-, F-): it keeps a full shell, carries its
   // charge, forms no bond. Group 1 and 2 metals are spectator cations by their element.
+  // written: the formal charge the atom was written with (SMILES); only its sum over a piece is used.
   const els = atoms.map(a => element(a.el));
   const edges = adj.map(([i, j]) => [Math.min(i, j), Math.max(i, j)]);
   const fixed = atoms.map((a, i) => {
@@ -33,76 +40,109 @@ export function buildNode({ atoms, adj, charge = 0 }) {
     if (a.ion === -1) return { lone: e.ceiling, charge: e.valence - e.ceiling };
     return null;
   });
-  return { atoms: atoms.map((a, k) => ({ el: a.el, pos: a.pos ? [...a.pos] : null, idx: k, ion: a.ion || 0 })), els, edges, charge, fixed };
+  const out = atoms.map((a, k) => ({ el: a.el, pos: a.pos ? [...a.pos] : null, idx: k, ion: a.ion || 0 }));
+  if (atoms.every(a => Number.isInteger(a.written))) out.forEach((a, k) => { a.written = atoms[k].written; });
+  return { atoms: out, els, edges, charge, fixed };
 }
 
 export const isIon = (node, i) => !!node.fixed[i];
 
+// The pieces of a node: connected parts of the adjacency, each with the electrons it owns.
+export function pieces(node) {
+  const { atoms, els, edges, charge, fixed } = node;
+  const n = atoms.length;
+  const parent = atoms.map((_, i) => i);
+  const find = i => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+  edges.forEach(([i, j]) => { parent[find(i)] = find(j); });
+  const byRoot = new Map();
+  for (let i = 0; i < n; i++) { const r = find(i); if (!byRoot.has(r)) byRoot.set(r, []); byRoot.get(r).push(i); }
+  const written = atoms.every(a => Number.isInteger(a.written));
+  let parts = [...byRoot.values()];
+  if (!written) parts = [atoms.map((_, i) => i)]; // one pool, the overall charge is all we know
+  return parts.map(members => {
+    const valence = members.reduce((s, i) => s + (fixed[i] ? 0 : els[i].valence), 0);
+    const fixedCharge = members.reduce((s, i) => s + (fixed[i] ? fixed[i].charge : 0), 0);
+    const q = written ? members.reduce((s, i) => s + atoms[i].written, 0) : charge;
+    return { members, pool: valence - (q - fixedCharge) };
+  });
+}
+
 export function enumerate(node) {
-  const { els, edges, charge, fixed } = node;
+  const { els, edges, fixed } = node;
   const n = els.length;
   const free = i => !fixed[i];
-  // spectator ions keep their electrons and charge; the pool is what the rest share
-  const fixedCharge = fixed.reduce((s, f) => s + (f ? f.charge : 0), 0);
-  const pool = els.reduce((s, e, i) => s + (free(i) ? e.valence : 0), 0) - (charge - fixedCharge);
-  if (pool < 0) throw new Error('more positive charge than valence electrons');
+  // spectator ions keep their electrons and charge; the pool of a piece is what the rest share
+  const parts = pieces(node);
+  const pool = parts.reduce((s, p) => s + p.pool, 0);
+  if (parts.some(p => p.pool < 0)) throw new Error('more positive charge than valence electrons');
   const sumCeil = els.reduce((s, e, i) => s + (free(i) ? e.ceiling : 0), 0);
-  const radicals = pool % 2; // odd electron count means one unpaired electron somewhere
+  const radicals = parts.reduce((s, p) => s + (p.pool % 2), 0); // an odd piece has one unpaired electron
+  const pieceOf = new Array(n);
+  parts.forEach((p, q) => p.members.forEach(i => { pieceOf[i] = q; }));
 
   // bonding edges: both ends free
   const bondable = edges.map(([i, j]) => free(i) && free(j));
   const maxOrder = edges.map(([i, j], k) => bondable[k]
     ? Math.min(3, Math.floor(els[i].ceiling / 2), Math.floor(els[j].ceiling / 2))
     : 0);
+  const capHalf = els.map((e, i) => (free(i) ? Math.floor(e.ceiling / 2) : 0)); // most bond order at an atom
 
   // S = total bond order. Holes (in electrons) = sumCeil - pool - 2S, so more bonds means fewer holes.
   // Search from the largest S that could possibly work downward until some assignment exists.
   let sBound = Math.min(
     Math.floor((sumCeil - pool) / 2),
     maxOrder.reduce((a, b) => a + b, 0),
+    Math.floor(capHalf.reduce((a, b) => a + b, 0) / 2),
   );
   if (sBound < 0) sBound = 0;
 
-  // Fewest holes first (largest S), and among those the fewest cut pairs (edges at order 0): the search
-  // asks for assignments with total S and at most `cuts` zeros, cuts rising from 0, so cuts are only
-  // tried when the octet leaves no other way. Trying zeros everywhere, as before, made fused rings
-  // take seconds to minutes.
-  const bondableCount = bondable.filter(Boolean).length;
-  const smallRing = smallRingAtoms(n, edges, bondable, 7); // ring rule, see below; also prunes the search
-  let found = [];
-  let S = sBound;
-  outer: for (; S >= 0; S--) {
-    for (let cuts = 0; cuts <= bondableCount; cuts++) {
-      found = searchOrders(n, els, edges, maxOrder, bondable, S, cuts, smallRing);
-      if (found.length) break outer;
-    }
-  }
-  const holes = sumCeil - pool - 2 * S; // in electrons
-  const L = pool - 2 * S;                // lone electrons to place
-
-  // place lone electrons for each bond-order assignment
-  let structures = [];
-  for (const orders of found) {
+  // for each bond-order assignment, place the lone electrons piece by piece and combine
+  const structuresFor = orders => {
     const bondsAt = new Array(n).fill(0);
     edges.forEach(([i, j], k) => { bondsAt[i] += orders[k]; bondsAt[j] += orders[k]; });
     const cap = els.map((e, i) => free(i) ? e.ceiling - 2 * bondsAt[i] : 0);
-    for (const lone0 of placeLone(cap, L, radicals)) {
-      const lone = lone0.map((v, i) => free(i) ? v : fixed[i].lone);
+    const cuts = orders.reduce((s, o, k) => s + (bondable[k] && o === 0 ? 1 : 0), 0);
+    // each piece places what its pool leaves after its bonds; a piece with an odd pool has a radical
+    const perPiece = parts.map((p, q) => {
+      const inBonds = edges.reduce((s, [i], k) => s + (pieceOf[i] === q ? 2 * orders[k] : 0), 0);
+      const L = p.pool - inBonds;
+      if (L < 0) return [];
+      const local = p.members.filter(free);
+      return placeLone(local.map(i => cap[i]), L, p.pool % 2).map(v => local.map((i, t) => [i, v[t]]));
+    });
+    if (perPiece.some(list => !list.length)) return [];
+    return combine(perPiece).map(choice => {
+      const lone = els.map((e, i) => free(i) ? 0 : fixed[i].lone);
+      choice.forEach(pairs => pairs.forEach(([i, v]) => { lone[i] = v; }));
       const fc = els.map((e, i) => free(i) ? e.valence - lone[i] - bondsAt[i] : fixed[i].charge);
       const count = els.map((e, i) => free(i) ? 2 * bondsAt[i] + lone[i] : 0);
-      const cuts = orders.reduce((s, o, k) => s + (bondable[k] && o === 0 ? 1 : 0), 0);
-      structures.push({ orders, lone, charge: fc, count, cuts });
+      return { orders, lone, charge: fc, count, cuts };
+    });
+  };
+
+  // Largest S first (fewest holes). At each S the search first allows no cut pair at all, then one,
+  // then two, and stops at the first count that gives structures: the second rule (fewest cut pairs)
+  // is built into the search, so the many assignments with cuts that it would throw away are never
+  // listed (on caffeine they ran to hundreds of thousands and overflowed the stack).
+  let structures = [];
+  let S = sBound;
+  const bondableCount = bondable.filter(Boolean).length;
+  outer: for (; S >= 0; S--) {
+    for (let budget = 0; budget <= bondableCount; budget++) {
+      const found = searchOrders(n, edges, maxOrder, capHalf, S, budget);
+      for (const orders of found) for (const st of structuresFor(orders)) structures.push(st);
+      if (structures.length) break outer;
     }
   }
   if (!structures.length) throw new Error('no Lewis structure found');
-
-  // second rule, fewest cut pairs, is built into the search above; nothing to drop here
-  const rejectedByCuts = [];
+  const holes = sumCeil - pool - 2 * S; // in electrons
+  const rejectedByCuts = []; // kept for callers; the search no longer lists what this rule drops
 
   // ring rule: no atom in a ring of seven or fewer atoms carries two pi parts (two double bonds, or a
   // triple bond), because such an atom would be linear and a small ring cannot hold it. This removes
   // the pyridine structures with C=N(+)=C in the ring. Checked against the geometry of the node, not
   // the structure: resonance locks nothing in (item 11), so every contributor must fit the same ring.
+  const smallRing = smallRingAtoms(n, edges, bondable, 7);
   if (smallRing.size) {
     const fits = s => {
       const pi = new Array(n).fill(0);
@@ -115,15 +155,31 @@ export function enumerate(node) {
   }
 
   // third rule (his, 5 Nov 2026): no formal charge beyond +1 or -1 unless every structure has one
-  // (SF6 keeps S2+; nitrous oxide loses N2-). Ionic cations are exempt (Mg2+, Ca2+).
-  const within = s => s.charge.every((q, i) => !free(i) || Math.abs(q) <= 1);
-  const rejectedByMagnitude = structures.some(within) ? structures.filter(s => !within(s)) : [];
-  if (rejectedByMagnitude.length) structures = structures.filter(within);
+  // (SF6 keeps S2+; nitrous oxide loses N2-). Ionic cations are exempt (Mg2+, Ca2+). Judged piece by
+  // piece, so an SF6 in one piece does not excuse a 2- somewhere else.
+  const rejectedByMagnitude = [];
+  for (const p of parts) {
+    const within = s => p.members.every(i => !free(i) || Math.abs(s.charge[i]) <= 1);
+    if (!structures.some(within)) continue;
+    for (const s of structures) if (!within(s)) rejectedByMagnitude.push(s);
+    structures = structures.filter(within);
+  }
 
   const w = 1 / structures.length;
   structures.forEach(s => { s.weight = w; });
 
   return { pool, holes, structures, avg: average(structures, edges.length, n), rejectedByCuts, rejectedByMagnitude, edges, radicals };
+}
+
+// every way of taking one item from each list
+function combine(lists) {
+  let out = [[]];
+  for (const list of lists) {
+    const next = [];
+    for (const partial of out) for (const item of list) next.push([...partial, item]);
+    out = next;
+  }
+  return out;
 }
 
 function average(structures, m, n) {
@@ -195,61 +251,63 @@ function smallRingAtoms(n, edges, bondable, maxSize) {
   return inRing;
 }
 
-// All bond-order assignments with total exactly S, at most `maxZeros` bondable edges at order 0,
-// respecting per-atom ceilings. At each step the edge with the fewest remaining choices is assigned
-// next (a forced edge first), and two bounds prune: the most the remaining edges could still add, and
-// the least they must add.
-function searchOrders(n, els, edges, maxOrder, bondable, S, maxZeros, smallRing) {
+// All bond-order assignments with total exactly S and at most `budget` pairs cut to order 0,
+// respecting per-atom ceilings (capHalf: the most bond order an atom may carry). Pairs are visited
+// atom by atom, each atom's pairs to later atoms in one block, so an atom is closed as soon as its
+// block is done. Bond order an atom could still have carried but no remaining pair can use is slack
+// spent; the total slack is the sum of the ceilings less 2S, and a branch that spends more than that
+// cannot reach S, so it is cut. Without this the search on a trityl cation runs for minutes; with
+// it, milliseconds.
+function searchOrders(n, edges, maxOrder, capHalf, S, budget) {
   const m = edges.length;
-  const capOf = i => Math.floor(els[i].ceiling / 2);
-  const used = new Array(n).fill(0);
-  const piAt = new Array(n).fill(0); // pi parts already placed at each atom
-  const orders = new Array(m).fill(0);
-  const assigned = new Array(m).fill(false);
-  // an atom in a small ring may carry at most one pi part (the ring rule), so its bonds top out lower
-  const topFor = (k, i, j) => {
-    let t = Math.min(maxOrder[k], capOf(i) - used[i], capOf(j) - used[j]);
-    if (smallRing.has(i)) t = Math.min(t, 1 + Math.max(0, 1 - piAt[i]));
-    if (smallRing.has(j)) t = Math.min(t, 1 + Math.max(0, 1 - piAt[j]));
-    return t;
-  };
-  const results = [];
-  const LIMIT = 20000; // more structures than this is not a teaching molecule
+  const totalSlack = capHalf.reduce((a, b) => a + b, 0) - 2 * S;
+  if (totalSlack < 0) return [];
+  // atoms in breadth-first order over the pairs that can bond, then pairs ordered by the earlier atom
+  const rank = new Array(n).fill(-1);
+  const nbrs = Array.from({ length: n }, () => []);
+  edges.forEach(([i, j], k) => { if (maxOrder[k] > 0) { nbrs[i].push(j); nbrs[j].push(i); } });
+  let next = 0;
+  for (let s = 0; s < n; s++) {
+    if (rank[s] >= 0) continue;
+    rank[s] = next++;
+    const queue = [s];
+    while (queue.length) { const a = queue.shift(); for (const b of nbrs[a]) if (rank[b] < 0) { rank[b] = next++; queue.push(b); } }
+  }
+  const order = edges.map((_, k) => k).filter(k => maxOrder[k] > 0)
+    .sort((a, b) => {
+      const [a1, a2] = [Math.min(rank[edges[a][0]], rank[edges[a][1]]), Math.max(rank[edges[a][0]], rank[edges[a][1]])];
+      const [b1, b2] = [Math.min(rank[edges[b][0]], rank[edges[b][1]]), Math.max(rank[edges[b][0]], rank[edges[b][1]])];
+      return a1 - b1 || a2 - b2;
+    });
+  const last = new Array(n).fill(-1); // position in `order` of the last pair touching each atom
+  order.forEach((k, q) => { last[edges[k][0]] = q; last[edges[k][1]] = q; });
+  const suffixMax = new Array(order.length + 1).fill(0);
+  for (let q = order.length - 1; q >= 0; q--) suffixMax[q] = suffixMax[q + 1] + maxOrder[order[q]];
 
-  function rec(left, sum, zeros) {
-    if (results.length >= LIMIT) return;
-    if (sum > S) return;
-    if (left === 0) { if (sum === S) results.push([...orders]); return; }
-    // bounds from the edges still to assign, and the edge with the fewest choices goes next
-    let most = 0, mustHave = 0, pick = -1, pickChoices = Infinity;
-    for (let k = 0; k < m; k++) {
-      if (assigned[k]) continue;
-      const [i, j] = edges[k];
-      const top = topFor(k, i, j);
-      const low = bondable[k] && zeros >= maxZeros ? 1 : 0;
-      if (top < low) return;
-      most += top;
-      if (bondable[k]) mustHave++;
-      const choices = top - low;
-      if (choices < pickChoices) { pickChoices = choices; pick = k; }
-    }
-    if (sum + most < S) return;
-    if (sum + Math.max(0, mustHave - (maxZeros - zeros)) > S) return;
-    const k = pick;
+  if (order.length - budget > S) return []; // every pair not cut carries at least one bond
+  const results = [];
+  const orders = new Array(m).fill(0);
+  const used = new Array(n).fill(0); // bond order already placed at each atom
+  function rec(q, sum, slack, cuts) {
+    if (sum > S || slack > totalSlack) return;
+    if (sum + suffixMax[q] < S) return;
+    if (sum + (order.length - q) - (budget - cuts) > S) return; // the pairs left, less the cuts left, each need a bond
+    if (q === order.length) { if (sum === S) results.push([...orders]); return; }
+    const k = order[q];
     const [i, j] = edges[k];
-    const top = Math.min(topFor(k, i, j), S - sum);
-    const low = bondable[k] && zeros >= maxZeros ? 1 : 0;
-    assigned[k] = true;
-    for (let o = top; o >= low; o--) {
-      const pi = Math.max(0, o - 1);
-      orders[k] = o; used[i] += o; used[j] += o; piAt[i] += pi; piAt[j] += pi;
-      rec(left - 1, sum + o, zeros + (bondable[k] && o === 0 ? 1 : 0));
-      used[i] -= o; used[j] -= o; piAt[i] -= pi; piAt[j] -= pi;
+    const top = Math.min(maxOrder[k], capHalf[i] - used[i], capHalf[j] - used[j], S - sum);
+    const bottom = cuts < budget ? 0 : 1;
+    for (let o = top; o >= bottom; o--) {
+      orders[k] = o; used[i] += o; used[j] += o;
+      let spent = slack;
+      if (last[i] === q) spent += capHalf[i] - used[i];
+      if (last[j] === q) spent += capHalf[j] - used[j];
+      rec(q + 1, sum + o, spent, cuts + (o === 0 ? 1 : 0));
+      used[i] -= o; used[j] -= o;
     }
     orders[k] = 0;
-    assigned[k] = false;
   }
-  rec(m, 0, 0);
+  rec(0, 0, 0, 0);
   return results;
 }
 

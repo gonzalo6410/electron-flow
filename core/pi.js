@@ -61,7 +61,7 @@ export function piFrame(node, result, pos, groups, pic) {
   const edgesAt = Array.from({ length: n }, () => []);
   edges.forEach(([i, j], k) => { edgesAt[i].push(k); edgesAt[j].push(k); });
 
-  // seed from planes, then propagate through linear atoms, then random
+  // seed from planes, then borrow from next door, then random
   let pending = edges.map((_, k) => k).filter(k => piCount[k] > 0);
   const setFrom = (k, v) => {
     const axis = axisOf(k);
@@ -75,42 +75,45 @@ export function piFrame(node, result, pos, groups, pic) {
     const v = planeN[i] || planeN[j];
     if (v) setFrom(k, v);
   }
-  pending = pending.filter(k => !normals[k].length);
-  let progress = true;
-  while (pending.length && progress) {
-    progress = false;
-    for (const k of pending) {
-      const [i, j] = edges[k];
-      for (const atom of [i, j]) {
-        if (groups[atom].groups !== 2) continue;
-        const other = edgesAt[atom].find(q => q !== k && normals[q].length);
-        if (other === undefined) continue;
-        // perpendicular to the neighbouring pi part at this linear atom
-        const m = normals[other][0];
-        if (setFrom(k, cross(axisOf(k), m))) { progress = true; break; }
+  // A pi part with no flat atom at either end takes its direction from next door. At a linear atom
+  // it is at right angles to the other pi part there (allene, CO2, N#N-O). Across a single bond from
+  // a linear atom it lies parallel to a flat atom's p orbitals or to the pi part on the far side
+  // (the triple bond of vinylacetylene or benzonitrile, the two of a diyne), so the lines of a
+  // triple bond are drawn in the plane of the molecule, not edge-on at random.
+  const borrow = k => {
+    const [i, j] = edges[k];
+    for (const atom of [i, j]) {
+      if (groups[atom].groups !== 2) continue;
+      const other = edgesAt[atom].find(q => q !== k && normals[q].length);
+      if (other !== undefined && setFrom(k, cross(axisOf(k), normals[other][0]))) return true;
+    }
+    for (const atom of [i, j]) {
+      if (groups[atom].groups !== 2) continue;
+      for (const q of edgesAt[atom]) {
+        if (q === k || piCount[q] > 0) continue;
+        const b = edges[q][0] === atom ? edges[q][1] : edges[q][0];
+        if (planeN[b] && setFrom(k, planeN[b])) return true;
+        const far = edgesAt[b].find(r => r !== q && normals[r].length);
+        if (far !== undefined && setFrom(k, normals[far][0])) return true;
       }
     }
-    pending = pending.filter(k => !normals[k].length);
-  }
+    return false;
+  };
+  const propagate = () => {
+    let progress = true;
+    while (pending.length && progress) {
+      progress = false;
+      for (const k of pending) if (!normals[k].length && borrow(k)) progress = true;
+      pending = pending.filter(k => !normals[k].length);
+    }
+  };
+  pending = pending.filter(k => !normals[k].length);
+  propagate();
   // nothing to go on: a fixed perpendicular, then propagate again
   while (pending.length) {
-    const k = pending[0];
-    setFrom(k, anyPerp(axisOf(k)));
+    setFrom(pending[0], anyPerp(axisOf(pending[0])));
     pending = pending.filter(q => !normals[q].length);
-    let again = true;
-    while (pending.length && again) {
-      again = false;
-      for (const q of pending) {
-        const [i, j] = edges[q];
-        for (const atom of [i, j]) {
-          if (groups[atom].groups !== 2) continue;
-          const other = edgesAt[atom].find(r => r !== q && normals[r].length);
-          if (other === undefined) continue;
-          if (setFrom(q, cross(axisOf(q), normals[other][0]))) { again = true; break; }
-        }
-      }
-      pending = pending.filter(q => !normals[q].length);
-    }
+    propagate();
   }
 
   // plane normals for terminal three-group atoms come from their pi bond; failing that from a
