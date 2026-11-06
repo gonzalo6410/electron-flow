@@ -14,10 +14,16 @@
   h1 { font-size: 15px; font-weight: 600; letter-spacing: 0.01em; margin: 0 0 14px 0; }
   h2 { font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.08em; color: var(--mute); margin: 22px 0 6px 0; }
   select { width: 100%; font: inherit; font-size: 13px; color: var(--ink); background: #fff; border: 1px solid #ccc; border-radius: 4px; padding: 6px 8px; }
+  .smiles { margin-top: 8px; }
+  .smiles input { width: 100%; box-sizing: border-box; font: inherit; font-size: 13px; color: var(--ink); border: 1px solid #ccc; border-radius: 4px; padding: 6px 8px; }
+  .smiles input:focus { outline: none; border-color: var(--ink); }
+  #error { color: #a33; font-size: 12px; margin-top: 4px; min-height: 0; }
   .seg { display: flex; margin-top: 10px; border: 1px solid #ccc; border-radius: 4px; overflow: hidden; }
   .seg button { flex: 1; font: inherit; font-size: 12px; color: var(--ink); background: #fff; border: 0; padding: 6px 4px; cursor: pointer; }
   .seg button + button { border-left: 1px solid #ccc; }
   .seg button.on { background: var(--ink); color: #fff; }
+  .steps { width: 92px; margin-top: 8px; }
+  .steps button { padding: 3px 0; font-size: 14px; }
   #status { margin-top: 12px; color: var(--mute); }
   #status b { color: var(--ink); font-weight: 500; }
   table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
@@ -31,17 +37,20 @@
   #hint { position: absolute; left: 14px; bottom: 10px; font-size: 11px; color: #aaa; }
 </style>
 <script type="importmap">
-{ "imports": { "three": "./vendor/three.module.js" } }
+{ "imports": { "three": "./vendor/three.module.js", "openchemlib": "./vendor/openchemlib.js" } }
 </script>
 </head>
 <body>
   <div id="panel">
     <h1>Electron Flow</h1>
     <select id="case"></select>
+    <form id="smiles-form" class="smiles"><input id="smiles" type="text" placeholder="or type a SMILES and press enter" spellcheck="false" autocomplete="off"></form>
+    <div id="error"></div>
     <div class="seg">
       <button id="btn-cycle" class="on">one at a time</button>
       <button id="btn-avg">weighted average</button>
     </div>
+    <div id="steps" class="seg steps"><button id="prev" title="previous structure (left arrow)">&#8592;</button><button id="next" title="next structure (right arrow)">&#8594;</button></div>
     <div id="status"></div>
     <h2>Atoms</h2>
     <table id="atoms"></table>

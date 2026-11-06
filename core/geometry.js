@@ -61,10 +61,10 @@ export function electronGroups(node, result) {
   });
   const assoc = Array.from({ length: n }, () => []); // ionic partners
   result.edges.forEach(([i, j], k) => {
-    if (result.avg.orders[k] <= 1e-9 && (node.els[i].ionic || node.els[j].ionic)) { assoc[i].push(j); assoc[j].push(i); }
+    if (result.avg.orders[k] <= 1e-9 && (node.fixed[i] || node.fixed[j])) { assoc[i].push(j); assoc[j].push(i); }
   });
   return node.atoms.map((a, i) => {
-    if (node.els[i].ionic) return { nbrs: nbrs[i], lonePairs: 0, groups: 1, assoc: assoc[i] };
+    if (node.fixed[i]) return { nbrs: nbrs[i], lonePairs: 0, groups: 1, assoc: assoc[i] };
     const lonePairs = Math.floor(result.avg.lone[i] / 2 + 1e-9);
     const groups = Math.max(1, Math.min(6, nbrs[i].length + lonePairs));
     return { nbrs: nbrs[i], lonePairs: Math.max(0, groups - nbrs[i].length), groups, assoc: assoc[i] };
@@ -275,7 +275,7 @@ function makeEnergy(node, result, groups) {
   result.edges.forEach(([i, j], k) => {
     const o = result.avg.orders[k];
     if (o > 1e-9) bonds.push({ i, j, d0: bondLength(sym[i], sym[j], o, !!(result.transitionEdges && result.transitionEdges[k])), order: o });
-    else if (node.els[i].ionic || node.els[j].ionic) bonds.push({ i, j, d0: element(sym[i]).radius + element(sym[j]).radius + 0.2, order: 0, loose: true });
+    else if (node.fixed[i] || node.fixed[j]) bonds.push({ i, j, d0: element(sym[i]).radius + element(sym[j]).radius + 0.2, order: 0, loose: true });
   });
   const bonded = new Set(bonds.map(b => `${b.i}-${b.j}`));
   const isBonded = (i, j) => bonded.has(`${Math.min(i, j)}-${Math.max(i, j)}`);
@@ -306,6 +306,20 @@ function makeEnergy(node, result, groups) {
     }
   });
 
+  // at a linear atom with two multiple bonds (allene, ketene) the planes of its two neighbours are at
+  // right angles, because the two pi parts are
+  const twists = []; // {x, z, a, b}
+  groups.forEach((g, y) => {
+    if (g.groups !== 2 || g.nbrs.length !== 2) return;
+    const [x, z] = g.nbrs.map(nb => nb.j);
+    const ox = g.nbrs[0].order, oz = g.nbrs[1].order;
+    if (ox <= 1.05 || oz <= 1.05) return;
+    for (const na of groups[x].nbrs) for (const nb of groups[z].nbrs) {
+      if (na.j === y || nb.j === y) continue;
+      twists.push({ x, z, a: na.j, b: nb.j });
+    }
+  });
+
   const kb = 100, ka = 30, kf = 10, kr = 5;
   function energy(pos) {
     let E = 0;
@@ -327,6 +341,15 @@ function makeEnergy(node, result, groups) {
       if (l1 < 1e-9 || l2 < 1e-9) continue;
       const s = len(cross(n1, n2)) / (l1 * l2);
       E += kf * f.k * s * s;
+    }
+    for (const t of twists) {
+      // dihedral a-x-z-b about the x...z axis should be 90 degrees: cos = 0
+      const b1 = sub(pos[t.x], pos[t.a]), b2 = sub(pos[t.z], pos[t.x]), b3 = sub(pos[t.b], pos[t.z]);
+      const n1 = cross(b1, b2), n2 = cross(b2, b3);
+      const l1 = len(n1), l2 = len(n2);
+      if (l1 < 1e-9 || l2 < 1e-9) continue;
+      const c = dot(n1, n2) / (l1 * l2);
+      E += kf * c * c;
     }
     for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
       if (isBonded(i, j) || oneThree.has(`${i}-${j}`)) continue;

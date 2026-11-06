@@ -115,11 +115,11 @@ export const CASES = [
   },
   {
     name: 'nitrous oxide',
-    // N#N(+)-O(-), N(-)=N(+)=O, and N(2-)-N(+)#O(+): three equal structures under pure formalism
+    // N#N(+)-O(-) and N(-)=N(+)=O; the N(2-)-N(+)#O(+) form is dropped by the magnitude rule
     atoms: [{ el: 'N' }, { el: 'N' }, { el: 'O' }],
     adj: [[0, 1], [1, 2]],
     charge: 0,
-    expect: { structures: 3, holes: 0, charge: { 1: 1 } },
+    expect: { structures: 2, holes: 0, charge: { 0: -0.5, 1: 1, 2: -0.5 }, orders: { 0: 2.5, 1: 1.5 } },
   },
 ];
 

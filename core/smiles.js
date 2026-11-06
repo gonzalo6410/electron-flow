@@ -1,0 +1,51 @@
+// Molecules from SMILES, using openchemlib (BSD-3) only to read the text: which atoms, which atoms are
+// joined, the overall charge. Bond orders, lone pairs and formal charges are recomputed by our own
+// engine (core/lewis.js), so what the SMILES says about those is ignored.
+//
+// Counter-ions written as separate pieces ([Na+].[O-]...) are tied loosely to a partner (item 15):
+// a cation to the atom carrying a negative charge in the SMILES (the first one, if several),
+// failing that to the most electronegative atom; an anion the other way round.
+
+import { Molecule } from 'openchemlib';
+import { ELEMENTS, element } from './elements.js';
+
+export function nodeFromSmiles(smiles) {
+  const text = smiles.trim();
+  if (!text) throw new Error('empty SMILES');
+  let m;
+  try { m = Molecule.fromSmiles(text); } catch (e) { throw new Error('could not read that SMILES'); }
+  m.addImplicitHydrogens();
+  const n = m.getAllAtoms();
+  if (!n) throw new Error('no atoms');
+  const atoms = [];
+  for (let i = 0; i < n; i++) {
+    const el = m.getAtomLabel(i);
+    if (!ELEMENTS[el]) throw new Error(`element ${el} is not in the table yet`);
+    atoms.push({ el, written: m.getAtomCharge(i) });
+  }
+  const adj = [];
+  for (let b = 0; b < m.getAllBonds(); b++) adj.push([m.getBondAtom(0, b), m.getBondAtom(1, b)]);
+  const charge = atoms.reduce((s, a) => s + a.written, 0);
+
+  // tie loose ions to partners
+  const bonded = new Set(adj.flat());
+  for (let i = 0; i < n; i++) {
+    const a = atoms[i];
+    const loose = element(a.el).ionic || (!bonded.has(i) && n > 1 && a.written !== 0);
+    if (!loose || bonded.has(i)) continue;
+    const wantSign = a.written > 0 ? -1 : 1;
+    let partner = atoms.findIndex((b, j) => j !== i && Math.sign(b.written) === wantSign && !element(b.el).ionic);
+    if (partner < 0) {
+      let best = -1, bestEn = wantSign < 0 ? -1 : 99;
+      atoms.forEach((b, j) => {
+        if (j === i || element(b.el).ionic || b.el === 'H') return;
+        const en = element(b.el).en;
+        if (wantSign < 0 ? en > bestEn : en < bestEn) { best = j; bestEn = en; }
+      });
+      partner = best;
+    }
+    if (partner >= 0) adj.push([i, partner]);
+  }
+  // a single-atom piece written with a negative charge is a spectator anion
+  return { atoms: atoms.map((a, i) => ({ el: a.el, ion: (!bonded.has(i) && a.written < 0 && !element(a.el).ionic) ? -1 : 0 })), adj, charge };
+}

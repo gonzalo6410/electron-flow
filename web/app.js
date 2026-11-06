@@ -2,8 +2,13 @@
 import * as THREE from 'three';
 import { OrbitControls } from './vendor/OrbitControls.js';
 import { CASES, runCase } from './core/cases.js';
-import { relax, lonePairDirections } from './core/geometry.js';
+import { COMPOUNDS } from './core/compounds.js';
+import { nodeFromSmiles } from './core/smiles.js';
+import { buildNode, enumerate } from './core/lewis.js';
+import { relax } from './core/geometry.js';
+import { piFrame } from './core/pi.js';
 import { ELEMENTS } from './core/elements.js';
+import { structureFamilies } from './core/symmetry.js';
 
 // ---------- formatting ----------
 const MINUS = '−';
@@ -141,7 +146,8 @@ function pairSprite(opacity = 1) {
 // ---------- state ----------
 let current = null;   // {c, node, r, geo, lpDirs}
 let mode = 'cycle';
-let structIdx = 0;
+let familyIdx = 0;   // which family of equivalent structures is shown (stepped by hand)
+let memberIdx = 0;   // which member of the family (cycles on its own)
 let lastSwitch = 0;
 let fade = null;      // {from, to, start}
 const atomGroup = new THREE.Group();   // spheres and symbols, fixed per case
@@ -150,33 +156,80 @@ scene.add(atomGroup);
 scene.add(structureGroup);
 const faceCamera = []; // {sprite, index, kind} sprites repositioned every frame
 
-function load(idx) {
-  const c = CASES[idx];
-  const { node, r } = runCase(c);
+function load(entry) {
+  let node, r, c;
+  if (entry.kind === 'case') {
+    c = entry.c;
+    ({ node, r } = runCase(c));
+  } else {
+    c = { name: entry.name };
+    node = buildNode(nodeFromSmiles(entry.smiles));
+    r = enumerate(node);
+  }
   const geo = relax(node, r);
-  const maxPairs = node.atoms.map((a, i) => node.els[i].ionic ? 0 : Math.max(...r.structures.map(st => Math.floor(st.lone[i] / 2)), Math.ceil(r.avg.lone[i] / 2 - 1e-9)));
-  const lpDirs = lonePairDirections(geo.pos, geo.groups, maxPairs);
-  current = { c, node, r, geo, lpDirs };
-  structIdx = 0;
+  const fam = structureFamilies(node, r);
+  current = { c, node, r, geo, families: fam.families };
+  familyIdx = 0; memberIdx = 0;
   lastSwitch = performance.now();
   fade = null;
   document.getElementById('rules').textContent =
     'Rules: the octet is never exceeded; contributing structures are the ones with the fewest octet holes; sigma bonds break only where the octet forces it; equal weights; geometry from electron groups and springs.';
-  // frame the molecule
+  // frame the molecule: look at its flattest face, tilted a little so depth still shows
   const extent = Math.max(1.5, ...geo.pos.map(p => Math.hypot(...p)));
   const dist = extent / Math.tan((camera.fov / 2) * Math.PI / 180) * 1.5 + 1;
-  camera.position.set(dist * 0.38, dist * 0.42, dist * 0.82);
+  const axes = principalAxes(geo.pos.filter((p, i) => node.atoms[i].el !== 'H'));
+  const view = axes.minor.clone().multiplyScalar(Math.cos(0.35)).add(axes.major.clone().multiplyScalar(Math.sin(0.35) * 0.6)).add(axes.middle.clone().multiplyScalar(Math.sin(0.35) * 0.8)).normalize();
+  camera.position.copy(view.multiplyScalar(dist));
+  camera.up.copy(axes.middle);
   controls.target.set(0, 0, 0);
   controls.update();
   buildAtoms();
   swapStructure(buildStructure(picture()), false);
+  document.getElementById('steps').style.visibility = (mode === 'cycle' && fam.families.length > 1) ? 'visible' : 'hidden';
   readout();
+}
+
+// principal axes of a point cloud (largest, middle, smallest spread), by Jacobi rotations
+function principalAxes(points) {
+  const n = Math.max(1, points.length);
+  const c = [0, 1, 2].map(a => points.reduce((s, p) => s + p[a], 0) / n);
+  const m = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+  for (const p of points) for (let a = 0; a < 3; a++) for (let b = 0; b < 3; b++) m[a][b] += (p[a] - c[a]) * (p[b] - c[b]);
+  const v = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+  for (let sweep = 0; sweep < 30; sweep++) {
+    let off = 0;
+    for (let p = 0; p < 3; p++) for (let q = p + 1; q < 3; q++) off += m[p][q] * m[p][q];
+    if (off < 1e-12) break;
+    for (let p = 0; p < 3; p++) for (let q = p + 1; q < 3; q++) {
+      if (Math.abs(m[p][q]) < 1e-12) continue;
+      const th = 0.5 * Math.atan2(2 * m[p][q], m[q][q] - m[p][p]);
+      const cs = Math.cos(th), sn = Math.sin(th);
+      for (let k = 0; k < 3; k++) {
+        const a = m[k][p], b = m[k][q];
+        m[k][p] = cs * a - sn * b; m[k][q] = sn * a + cs * b;
+      }
+      for (let k = 0; k < 3; k++) {
+        const a = m[p][k], b = m[q][k];
+        m[p][k] = cs * a - sn * b; m[q][k] = sn * a + cs * b;
+      }
+      for (let k = 0; k < 3; k++) {
+        const a = v[k][p], b = v[k][q];
+        v[k][p] = cs * a - sn * b; v[k][q] = sn * a + cs * b;
+      }
+    }
+  }
+  const order = [0, 1, 2].sort((a, b) => m[b][b] - m[a][a]);
+  const col = k => new THREE.Vector3(v[0][k], v[1][k], v[2][k]).normalize();
+  const major = col(order[0]), middle = col(order[1]);
+  const minor = major.clone().cross(middle).normalize();
+  if (minor.z < 0) minor.negate();
+  return { major, middle, minor };
 }
 
 function picture() {
   const { r } = current;
   if (mode === 'cycle') {
-    const st = r.structures[structIdx];
+    const st = r.structures[current.families[familyIdx][memberIdx]];
     return { orders: st.orders, charge: st.charge, lone: st.lone, count: st.count, single: true };
   }
   return { orders: r.avg.orders, charge: r.avg.charge, lone: r.avg.lone, count: r.avg.count, single: false };
@@ -200,9 +253,10 @@ function buildAtoms() {
 
 function buildStructure(pic) {
   const g = new THREE.Group();
-  const { node, r, geo, lpDirs } = current;
+  const { node, r, geo } = current;
   const pos = geo.pos;
   const sym = node.atoms.map(a => a.el);
+  const frame = piFrame(node, r, pos, geo.groups, pic);
   const bondMat = solid(0x3a3a3a);
   const ghostMat = solid(0xd0d0d0);
   const ionMat = solid(0xc8c8c8);
@@ -210,7 +264,7 @@ function buildStructure(pic) {
   // bonds
   r.edges.forEach(([i, j], k) => {
     const o = pic.orders[k];
-    const loose = node.els[i].ionic || node.els[j].ionic;
+    const loose = node.fixed[i] || node.fixed[j];
     const a = new THREE.Vector3(...pos[i]), b = new THREE.Vector3(...pos[j]);
     const bd = b.clone().sub(a).normalize();
     const ra = atomRadius(sym[i]) * 0.9, rb = atomRadius(sym[j]) * 0.9;
@@ -221,41 +275,42 @@ function buildStructure(pic) {
       else g.add(cylinder(a2.toArray(), b2.toArray(), 0.04, ghostMat));
       return;
     }
-    const full = Math.floor(o + 1e-9), fr = o - full;
-    const lines = full + (fr > 1e-9 ? 1 : 0);
-    const mid = a.clone().add(b).multiplyScalar(0.5);
-    const perpOf = v => v.clone().sub(bd.clone().multiplyScalar(v.dot(bd)));
-    let sum = new THREE.Vector3(), first = null;
-    for (const [p, q] of r.edges) {
-      const other = p === i ? q : q === i ? p : p === j ? q : q === j ? p : -1;
-      if (other < 0 || other === i || other === j) continue;
-      const v = perpOf(new THREE.Vector3(...pos[other]).sub(mid));
-      sum.add(v);
-      if (!first && v.length() > 1e-6) first = v;
-    }
-    let ref = sum.length() > 0.3 ? sum : first;
-    if (!ref) ref = perpOf(Math.abs(bd.x) < 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0));
-    const off = ref.clone().normalize().multiplyScalar(0.17);
-    for (let q = 0; q < lines; q++) {
-      const shift = off.clone().multiplyScalar(q - (lines - 1) / 2);
-      const pa = a2.clone().add(shift).toArray(), pb = b2.clone().add(shift).toArray();
-      const partial = q === lines - 1 && fr > 1e-9;
-      if (partial) dashed(pa, pb, 0.055, bondMat, g);
-      else g.add(cylinder(pa, pb, 0.07, bondMat));
-    }
+    // sigma part: solid if whole, dashed if partial
+    if (o >= 1 - 1e-9) g.add(cylinder(a2.toArray(), b2.toArray(), 0.07, bondMat));
+    else dashed(a2.toArray(), b2.toArray(), 0.06, bondMat, g);
+    // pi parts: a translucent lobe above and below, along the p orbitals; fainter when partial
+    frame.normals[k].forEach((nrm, q) => {
+      const amount = Math.min(1, o - 1 - q);
+      if (amount <= 1e-9) return;
+      const mid = a2.clone().add(b2).multiplyScalar(0.5);
+      const L = a2.distanceTo(b2);
+      const nv = new THREE.Vector3(...nrm);
+      const mat = new THREE.MeshLambertMaterial({ color: 0x5577aa, transparent: true, opacity: 0.22 + 0.3 * amount, depthWrite: false });
+      for (const side of [1, -1]) {
+        const lobe = new THREE.Mesh(sphereGeo, mat);
+        lobe.userData.baseOpacity = 0.22 + 0.3 * amount;
+        lobe.renderOrder = 1;
+        lobe.position.copy(mid).add(nv.clone().multiplyScalar(0.24 * side));
+        lobe.scale.set(0.17, L * 0.46, 0.15);
+        // y axis along the bond, z axis along the p orbital
+        const m = new THREE.Matrix4().makeBasis(bd.clone().cross(nv).normalize(), bd.clone(), nv.clone()); // right-handed: x = y cross z
+        lobe.quaternion.setFromRotationMatrix(m);
+        g.add(lobe);
+      }
+    });
   });
 
-  // lone pairs: whole pairs full, a fractional pair faded
+  // lone pairs: whole pairs full, a fractional pair faded; directions from the pi frame
   sym.forEach((el, i) => {
-    if (node.els[i].ionic) return;
+    if (node.fixed[i]) return;
     const rad = atomRadius(el);
     const pairs = pic.lone[i] / 2;
     const whole = Math.floor(pairs + 1e-9);
-    const shown = Math.ceil(pairs - 1e-9);
-    lpDirs[i].slice(0, shown).forEach((d, q) => {
+    frame.lonePairs[i].forEach((lp, q) => {
       const opacity = q < whole ? 1 : Math.max(0.2, pairs - whole);
       const sp = pairSprite(opacity);
       sp.userData.baseOpacity = opacity;
+      const d = lp.dir;
       sp.position.set(pos[i][0] + d[0] * (rad + 0.17), pos[i][1] + d[1] * (rad + 0.17), pos[i][2] + d[2] * (rad + 0.17));
       g.add(sp);
     });
@@ -306,6 +361,25 @@ function swapStructure(next, animate = true) {
 const FADE = 600;   // ms crossfade
 const DWELL = 2200; // ms per structure, equal weights so equal time
 
+function familyLine() {
+  const fams = current.families;
+  const size = fams[familyIdx].length;
+  const a = fams.length > 1 ? `<br>structure <b>${familyIdx + 1}</b> of ${fams.length} (step with the arrows)` : '';
+  const b = size > 1 ? `<br><b>${size}</b> equivalent by symmetry, cycling` : '';
+  return a + b;
+}
+
+function stepFamily(d) {
+  if (!current || mode !== 'cycle') return;
+  const nf = current.families.length;
+  if (nf < 2) return;
+  familyIdx = (familyIdx + d + nf) % nf;
+  memberIdx = 0;
+  lastSwitch = performance.now();
+  swapStructure(buildStructure(picture()), true);
+  readout();
+}
+
 function readout() {
   const { node, r } = current;
   const pic = picture();
@@ -314,30 +388,53 @@ function readout() {
   const st = document.getElementById('status');
   st.innerHTML = `<b>${r.pool}</b> valence electrons · <b>${n}</b> contributing structure${n === 1 ? '' : 's'} · <b>${r.holes / 2}</b> octet hole${r.holes === 2 ? '' : 's'}` +
     (r.transitionEdges ? '<br>transition: before and after each weighted 1/2' : '') +
-    (mode === 'cycle' && n > 1 ? `<br>structure <b>${structIdx + 1}</b> of ${n}` : '') +
+    (mode === 'cycle' && n > 1 ? familyLine() : '') +
     (mode === 'average' ? '<br>weighted average of all contributing structures' : '');
   const label = i => `${sym[i]}<sub>${i}</sub>`;
   document.getElementById('atoms').innerHTML =
     '<tr><th></th><th>charge</th><th>count</th><th>lone e</th></tr>' +
-    sym.map((el, i) => node.els[i].ionic
+    sym.map((el, i) => node.fixed[i]
       ? `<tr><td class="sym">${label(i)}</td><td>${frac(pic.charge[i])}</td><td class="dim">ion</td><td class="dim"></td></tr>`
       : `<tr><td class="sym">${label(i)}</td><td>${frac(pic.charge[i])}</td><td>${frac(pic.count[i], false)}</td><td>${frac(pic.lone[i], false)}</td></tr>`).join('');
   document.getElementById('bonds').innerHTML =
     '<tr><th></th><th>order</th></tr>' +
     r.edges.map(([i, j], k) => {
       const o = pic.orders[k];
-      const loose = node.els[i].ionic || node.els[j].ionic;
+      const loose = node.fixed[i] || node.fixed[j];
       return `<tr><td class="sym">${label(i)} – ${label(j)}</td><td${loose ? ' class="dim"' : ''}>${loose && o <= 1e-9 ? 'ion pair' : frac(o, false)}</td></tr>`;
     }).join('');
 }
 
 // ---------- controls ----------
 const sel = document.getElementById('case');
-CASES.forEach((c, i) => { const o = document.createElement('option'); o.value = i; o.textContent = c.name; sel.appendChild(o); });
-sel.addEventListener('change', () => load(Number(sel.value)));
+const ENTRIES = [
+  ...COMPOUNDS.map(c => ({ kind: 'smiles', name: c.name, smiles: c.smiles, group: 'compounds' })),
+  ...CASES.filter(c => c.before).map(c => ({ kind: 'case', name: c.name, c, group: 'transitions' })),
+];
+for (const groupName of ['compounds', 'transitions']) {
+  const og = document.createElement('optgroup');
+  og.label = groupName;
+  ENTRIES.forEach((e, i) => { if (e.group !== groupName) return; const o = document.createElement('option'); o.value = i; o.textContent = e.name; og.appendChild(o); });
+  sel.appendChild(og);
+}
+const errBox = document.getElementById('error');
+function tryLoad(entry) {
+  try { load(entry); errBox.textContent = ''; }
+  catch (e) { errBox.textContent = e.message; }
+}
+sel.addEventListener('change', () => tryLoad(ENTRIES[Number(sel.value)]));
+const smilesBox = document.getElementById('smiles');
+document.getElementById('smiles-form').addEventListener('submit', e => {
+  e.preventDefault();
+  const text = smilesBox.value.trim();
+  if (!text) return;
+  tryLoad({ kind: 'smiles', name: text, smiles: text });
+  smilesBox.blur();
+});
 const bCycle = document.getElementById('btn-cycle'), bAvg = document.getElementById('btn-avg');
 function setMode(m) {
   mode = m;
+  document.getElementById('steps').style.visibility = (m === 'cycle' && current.families.length > 1) ? 'visible' : 'hidden';
   bCycle.classList.toggle('on', m === 'cycle');
   bAvg.classList.toggle('on', m === 'average');
   lastSwitch = performance.now();
@@ -346,6 +443,13 @@ function setMode(m) {
 }
 bCycle.addEventListener('click', () => setMode('cycle'));
 bAvg.addEventListener('click', () => setMode('average'));
+document.getElementById('prev').addEventListener('click', () => stepFamily(-1));
+document.getElementById('next').addEventListener('click', () => stepFamily(1));
+window.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  if (e.key === 'ArrowLeft') stepFamily(-1);
+  if (e.key === 'ArrowRight') stepFamily(1);
+});
 
 const camRight = new THREE.Vector3(), camUp = new THREE.Vector3(), toCam = new THREE.Vector3();
 function placeSprites() {
@@ -379,8 +483,9 @@ function animate(t) {
         fade = null;
       }
     }
-    if (mode === 'cycle' && current.r.structures.length > 1 && !fade && t - lastSwitch > DWELL) {
-      structIdx = (structIdx + 1) % current.r.structures.length;
+    const family = current.families[familyIdx];
+    if (mode === 'cycle' && family.length > 1 && !fade && t - lastSwitch > DWELL) {
+      memberIdx = (memberIdx + 1) % family.length;
       lastSwitch = t;
       swapStructure(buildStructure(picture()), true);
       readout();
@@ -390,5 +495,6 @@ function animate(t) {
   controls.update();
   renderer.render(scene, camera);
 }
-load(0);
+tryLoad(ENTRIES.find(e => e.name === 'SF6') || ENTRIES[0]);
+sel.value = ENTRIES.findIndex(e => e.name === 'SF6');
 requestAnimationFrame(animate);
