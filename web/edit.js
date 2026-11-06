@@ -84,12 +84,7 @@ export function attachEditor(api) {
     const pos = api.getPositions();
     const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
     if (KEYS[key] && !e.shiftKey) {
-      const el = KEYS[key];
-      const parent = selected;
-      const r = addAtom(spec, el, parent);
-      const start = [...pos, placeNear(pos, parent, el, r.spec)];
-      selected = r.index;
-      apply(r.spec, start, 'add');
+      addElement(KEYS[key], selected);
       e.preventDefault();
     } else if ((e.key === 'Delete' || e.key === 'Backspace') && selected !== null) {
       const victim = selected;
@@ -114,7 +109,26 @@ export function attachEditor(api) {
     }
   });
 
+  function addElement(el, parent) {
+    const spec = api.getSpec(), pos = api.getPositions();
+    const r = addAtom(spec, el, parent);
+    const start = [...pos, placeNear(pos, parent, el, r.spec)];
+    selected = r.index;
+    apply(r.spec, start, 'add');
+  }
+
+  // drops from the periodic table: onto an atom bonds to it, onto empty space makes a free atom
+  api.domElement.addEventListener('dragover', e => { e.preventDefault(); });
+  api.domElement.addEventListener('drop', e => {
+    e.preventDefault();
+    const el = e.dataTransfer.getData('text/element');
+    if (!el || !api.isEditable()) return;
+    addElement(el, atomAt(e));
+  });
+
   return {
+    addElement,
+    selectedAtom() { return selected; },
     onLoaded() { select(null); },
     refresh() { refreshHalo(); },
     fill() {

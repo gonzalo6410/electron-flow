@@ -588,6 +588,24 @@ editor = attachEditor({
   setNote: text => { document.getElementById('note').textContent = text; },
 });
 document.getElementById('fill').addEventListener('click', () => editor.fill());
+// a periodic table of the elements the engine knows, in their places (main group only for now)
+const TABLE = [
+  ['H', '', '', '', '', '', '', 'He'],
+  ['Li', 'Be', 'B', 'C', 'N', 'O', 'F', 'Ne'],
+  ['Na', 'Mg', 'Al', 'Si', 'P', 'S', 'Cl', 'Ar'],
+  ['K', 'Ca', '', '', '', 'Se', 'Br', 'Kr'],
+  ['', '', '', '', '', '', 'I', 'Xe'],
+];
+const tableBox = document.getElementById('table');
+for (const row of TABLE) for (const el of row) {
+  const b = document.createElement('button');
+  if (!el) { b.className = 'gap'; b.tabIndex = -1; tableBox.appendChild(b); continue; }
+  b.textContent = el;
+  b.draggable = true;
+  b.addEventListener('click', () => editor.addElement(el, editor.selectedAtom()));
+  b.addEventListener('dragstart', e => { e.dataTransfer.setData('text/element', el); e.dataTransfer.effectAllowed = 'copy'; });
+  tableBox.appendChild(b);
+}
 document.getElementById('clear').addEventListener('click', () => editor.clear());
 
 const first = ENTRIES.findIndex(e => e.name === 'SF6');

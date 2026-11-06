@@ -28,6 +28,10 @@
   .steps button { flex: 1; font: inherit; font-size: 14px; color: var(--ink); background: #fff; border: 0; padding: 3px 0; cursor: pointer; }
   .steps button + button { border-left: 1px solid #ccc; }
   #status { margin-top: 12px; color: var(--mute); }
+  .table { display: grid; grid-template-columns: repeat(8, 1fr); gap: 3px; margin-top: 12px; }
+  .table button { font: inherit; font-size: 12px; color: var(--ink); background: #fff; border: 1px solid #ddd; border-radius: 3px; padding: 5px 0; cursor: grab; }
+  .table button:hover { border-color: var(--ink); }
+  .table button.gap { visibility: hidden; }
   .note { margin-top: 8px; font-size: 12px; color: var(--mute); min-height: 2.8em; }
   .row { display: flex; gap: 6px; margin-top: 6px; }
   button.small { font: inherit; font-size: 12px; color: var(--ink); background: #fff; border: 1px solid #ccc; border-radius: 4px; padding: 4px 10px; cursor: pointer; }
@@ -56,6 +60,7 @@
     <div id="status"></div>
     <div id="note" class="note"></div>
     <div class="row"><button id="fill" class="small">fill hydrogens</button><button id="clear" class="small">new molecule</button></div>
+    <div id="table" class="table" title="click an element to add it to the selected atom, or drag it onto an atom"></div>
     <details class="fold">
       <summary>editing</summary>
       <p>Click an atom to select it. Press a letter to add an atom bonded to it: C N O F S P B H, and L for Cl, R for Br, I for iodine, A for Na, K, M for Mg. Delete removes the selected atom. Shift-click another atom to bond or unbond the two. Plus and minus set the overall charge. Shift-H fills every atom's usual bonds with hydrogens. The engine works out bond orders, lone pairs and charges from what is there; to make a double bond, take hydrogens away.</p>
