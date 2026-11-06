@@ -544,7 +544,7 @@ function updatePanel() {
   const n = r.structures.length;
   document.getElementById('steps').style.visibility = (showResonance && families.length > 1) ? 'visible' : 'hidden';
   let line = `<b>${r.pool}</b> valence electrons · <b>${n}</b> contributing structure${n === 1 ? '' : 's'}`;
-  if (current.spec && current.spec.charge) line += ` · charge <b>${chargeMark(current.spec.charge)}</b>`;
+  if (current.spec && current.spec.charge) line += ` · charge <b>${(current.spec.charge > 0 ? '+' : MINUS) + Math.abs(current.spec.charge)}</b>`;
   if (r.transitionEdges) line += '<br>transition: before and after each weighted 1/2';
   if (showResonance && n > 1) {
     const size = families[familyIdx].length;
