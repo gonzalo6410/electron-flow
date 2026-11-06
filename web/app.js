@@ -10,6 +10,7 @@ import { relax } from './core/geometry.js';
 import { piFrame } from './core/pi.js';
 import { structureFamilies } from './core/symmetry.js';
 import { ELEMENTS } from './core/elements.js';
+import { attachEditor } from './edit.js';
 
 // ---------- timing ----------
 const DWELL = 4000;   // ms a structure stays before the next equivalent one
@@ -178,6 +179,13 @@ function principalAxes(points) {
   return { major, middle, minor, flat };
 }
 
+// true when some atom sits outside the picture
+function outOfView(geo) {
+  camera.updateMatrixWorld();
+  const v = new THREE.Vector3();
+  return geo.pos.some(p => { v.set(...p).project(camera); return Math.abs(v.x) > 0.92 || Math.abs(v.y) > 0.92 || v.z > 1; });
+}
+
 function frameCamera(node, geo) {
   const heavy = geo.pos.filter((p, i) => node.atoms[i].el !== 'H');
   const extent = Math.max(1.5, ...geo.pos.map(p => Math.hypot(...p)));
@@ -207,12 +215,38 @@ const atomGroup = new THREE.Group();      // spheres and symbols, fixed per mole
 let structureGroup = new THREE.Group();   // bonds, dots, charges, per structure
 scene.add(atomGroup, structureGroup);
 const tracked = [];          // sprites placed relative to the camera every frame
+let editor = null;           // set up at the end, once the page exists
 
 function load(entry) {
-  let node, r;
-  if (entry.kind === 'case') ({ node, r } = runCase(entry.c));
-  else { node = buildNode(nodeFromSmiles(entry.smiles)); r = enumerate(node); }
-  const geo = relax(node, r);
+  if (entry.kind === 'case') {
+    const { node, r } = runCase(entry.c);
+    show(null, node, r, null);
+  } else {
+    loadSpec(nodeFromSmiles(entry.smiles), null);
+  }
+}
+
+// a molecule given as atoms, adjacency and charge (from a SMILES or from editing); `start` holds
+// positions to begin the relaxation from, used when editing so the picture does not jump
+function loadSpec(spec, start) {
+  if (!spec.atoms.length) { showEmpty(); return; }
+  const node = buildNode(spec);
+  const r = enumerate(node);
+  show(spec, node, r, start);
+}
+
+function showEmpty() {
+  current = null;
+  fade = null;
+  atomGroup.clear(); tracked.length = 0;
+  scene.remove(structureGroup); structureGroup = new THREE.Group(); scene.add(structureGroup);
+  document.getElementById('steps').style.visibility = 'hidden';
+  document.getElementById('status').innerHTML = 'nothing here yet';
+  if (editor) editor.onLoaded();
+}
+
+function show(spec, node, r, start) {
+  const geo = relax(node, r, start ? { start } : {});
   // the main structure: least total formal charge, first one on a tie (all weights are equal; this
   // only picks what to show when resonance is switched off, and which family comes first)
   const spread = st => st.charge.reduce((s, q) => s + Math.abs(q), 0);
@@ -220,13 +254,15 @@ function load(entry) {
   r.structures.forEach((st, q) => { if (spread(st) < spread(r.structures[main])) main = q; });
   const families = structureFamilies(node, r).families
     .sort((a, b) => (spread(r.structures[a[0]]) - spread(r.structures[b[0]])) || (b.length - a.length) || (a[0] - b[0]));
-  current = { node, r, geo, families, main };
+  current = { spec, node, r, geo, families, main };
   familyIdx = 0; memberIdx = 0; fade = null;
   lastSwitch = performance.now();
-  frameCamera(node, geo);
+  if (!start || outOfView(geo)) frameCamera(node, geo);
   buildAtoms();
   swapStructure(buildStructure(), false);
   updatePanel();
+  if (editor && !start) editor.onLoaded();
+  if (editor) editor.refresh();
 }
 
 function shownStructure() {
@@ -243,6 +279,7 @@ function buildAtoms() {
     const m = new THREE.Mesh(sphereGeo, solid(ELEMENTS[a.el].color));
     m.position.set(...geo.pos[i]);
     m.scale.setScalar(rad);
+    m.userData.index = i;
     atomGroup.add(m);
     const sp = symbolSprite(a.el, Math.max(0.4, 1.5 * rad), isLight(ELEMENTS[a.el].color) ? '#111' : '#fff');
     atomGroup.add(sp);
@@ -507,6 +544,7 @@ function updatePanel() {
   const n = r.structures.length;
   document.getElementById('steps').style.visibility = (showResonance && families.length > 1) ? 'visible' : 'hidden';
   let line = `<b>${r.pool}</b> valence electrons · <b>${n}</b> contributing structure${n === 1 ? '' : 's'}`;
+  if (current.spec && current.spec.charge) line += ` · charge <b>${chargeMark(current.spec.charge)}</b>`;
   if (r.transitionEdges) line += '<br>transition: before and after each weighted 1/2';
   if (showResonance && n > 1) {
     const size = families[familyIdx].length;
@@ -538,6 +576,19 @@ function animate(t) {
   controls.update();
   renderer.render(scene, camera);
 }
+
+// ---------- editing ----------
+editor = attachEditor({
+  scene, camera, domElement: renderer.domElement,
+  getSpec: () => (current ? current.spec : { atoms: [], adj: [], charge: 0 }),
+  getPositions: () => (current ? current.geo.pos : []),
+  atomMeshes: () => atomGroup.children.filter(o => o.userData.index !== undefined),
+  isEditable: () => !current || !!current.spec,
+  loadSpec: (spec, start) => { loadSpec(spec, start); typedOption.textContent = 'edited molecule'; typedOption.hidden = false; sel.value = 'typed'; },
+  setNote: text => { document.getElementById('note').textContent = text; },
+});
+document.getElementById('fill').addEventListener('click', () => editor.fill());
+document.getElementById('clear').addEventListener('click', () => editor.clear());
 
 const first = ENTRIES.findIndex(e => e.name === 'SF6');
 sel.value = first;

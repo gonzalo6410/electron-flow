@@ -28,6 +28,10 @@
   .steps button { flex: 1; font: inherit; font-size: 14px; color: var(--ink); background: #fff; border: 0; padding: 3px 0; cursor: pointer; }
   .steps button + button { border-left: 1px solid #ccc; }
   #status { margin-top: 12px; color: var(--mute); }
+  .note { margin-top: 8px; font-size: 12px; color: var(--mute); min-height: 2.8em; }
+  .row { display: flex; gap: 6px; margin-top: 6px; }
+  button.small { font: inherit; font-size: 12px; color: var(--ink); background: #fff; border: 1px solid #ccc; border-radius: 4px; padding: 4px 10px; cursor: pointer; }
+  button.small:hover { border-color: var(--ink); }
   #status b { color: var(--ink); font-weight: 500; }
   .fold { margin-top: 18px; }
   .fold summary { cursor: pointer; font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.08em; color: var(--mute); list-style: none; }
@@ -50,6 +54,12 @@
     <label class="switch"><input id="resonance" type="checkbox"><span class="track"></span><span>resonance structures</span></label>
     <div id="steps" class="steps"><button id="prev" title="previous structure (left arrow)">&#8592;</button><button id="next" title="next structure (right arrow)">&#8594;</button></div>
     <div id="status"></div>
+    <div id="note" class="note"></div>
+    <div class="row"><button id="fill" class="small">fill hydrogens</button><button id="clear" class="small">new molecule</button></div>
+    <details class="fold">
+      <summary>editing</summary>
+      <p>Click an atom to select it. Press a letter to add an atom bonded to it: C N O F S P B H, and L for Cl, R for Br, I for iodine, A for Na, K, M for Mg. Delete removes the selected atom. Shift-click another atom to bond or unbond the two. Plus and minus set the overall charge. Shift-H fills every atom's usual bonds with hydrogens. The engine works out bond orders, lone pairs and charges from what is there; to make a double bond, take hydrogens away.</p>
+    </details>
     <details class="fold">
       <summary>rules</summary>
       <p>The octet is never exceeded. Contributing structures are the ones with the fewest octet holes. A sigma bond breaks only where the octet forces it. No formal charge beyond plus or minus one unless every structure has one. All contributing structures weigh the same. Structures that are the same picture with atoms renamed form one family and alternate on their own; different structures are stepped through with the arrows. Shapes follow the electron groups around each atom; bond lengths and angles are relaxed as springs.</p>
