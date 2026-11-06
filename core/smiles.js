@@ -49,3 +49,19 @@ export function nodeFromSmiles(smiles) {
   // a single-atom piece written with a negative charge is a spectator anion
   return { atoms: atoms.map((a, i) => ({ el: a.el, ion: (!bonded.has(i) && a.written < 0 && !element(a.el).ionic) ? -1 : 0 })), adj, charge };
 }
+
+// A SMILES for a molecule as the engine sees it in one structure: the atoms, the bonds with that
+// structure's whole orders (a pair at order 0 is left out), and that structure's formal charges.
+// Hydrogens are written out only where they carry a charge or are alone.
+export function toSmiles(node, structure) {
+  const m = new Molecule(node.atoms.length + 8, node.edges.length + 8);
+  const ids = node.atoms.map(a => m.addAtom(Molecule.getAtomicNoFromLabel(a.el)));
+  node.edges.forEach(([i, j], k) => {
+    const o = structure.orders[k];
+    if (o <= 0) return;
+    const b = m.addBond(ids[i], ids[j]);
+    m.setBondType(b, o >= 3 ? Molecule.cBondTypeTriple : o >= 2 ? Molecule.cBondTypeDouble : Molecule.cBondTypeSingle);
+  });
+  structure.charge.forEach((q, i) => { if (q) m.setAtomCharge(ids[i], Math.round(q)); });
+  return m.toSmiles();
+}

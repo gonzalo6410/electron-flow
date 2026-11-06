@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { OrbitControls } from './vendor/OrbitControls.js';
 import { CASES, runCase } from './core/cases.js';
 import { COMPOUNDS } from './core/compounds.js';
-import { nodeFromSmiles } from './core/smiles.js';
+import { nodeFromSmiles, toSmiles } from './core/smiles.js';
 import { buildNode, enumerate } from './core/lewis.js';
 import { relax } from './core/geometry.js';
 import { piFrame } from './core/pi.js';
@@ -501,7 +501,12 @@ function tryLoad(entry) {
   try { load(entry); errBox.textContent = ''; }
   catch (e) { errBox.textContent = e.message; }
 }
-sel.addEventListener('change', () => { if (sel.value !== 'typed') tryLoad(ENTRIES[Number(sel.value)]); });
+sel.addEventListener('change', () => {
+  if (sel.value === 'typed') return;
+  const entry = ENTRIES[Number(sel.value)];
+  tryLoad(entry);
+  smilesBox.value = entry.kind === 'smiles' ? entry.smiles : '';
+});
 const smilesBox = document.getElementById('smiles');
 document.getElementById('smiles-form').addEventListener('submit', e => {
   e.preventDefault();
@@ -584,7 +589,12 @@ editor = attachEditor({
   getPositions: () => (current ? current.geo.pos : []),
   atomMeshes: () => atomGroup.children.filter(o => o.userData.index !== undefined),
   isEditable: () => !current || !!current.spec,
-  loadSpec: (spec, start) => { loadSpec(spec, start); typedOption.textContent = 'edited molecule'; typedOption.hidden = false; sel.value = 'typed'; },
+  loadSpec: (spec, start) => {
+    loadSpec(spec, start);
+    typedOption.textContent = 'edited molecule'; typedOption.hidden = false; sel.value = 'typed';
+    // the box shows the SMILES of what is on screen now, in its main structure, ready to copy
+    smilesBox.value = current ? toSmiles(current.node, current.r.structures[current.main]) : '';
+  },
   setNote: text => { document.getElementById('note').textContent = text; },
 });
 document.getElementById('fill').addEventListener('click', () => editor.fill());
