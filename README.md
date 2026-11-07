@@ -25,5 +25,10 @@ test/      node test/run.js (known answers), families.js, pi.js, compounds.js (t
 web/       index.html, app.js (three.js viewer, the film of a move), edit.js (editing on the page), arrows.js
            (drawing curved arrows with the pointer), vendor/ (three.js and openchemlib shipped with the page)
 build.sh   assembles dist/ (web + core) for publishing
+tools/     driving the page in headless Chrome with playwright, for screenshots and checks: shot.py (one SMILES,
+           one picture), drive.py (editing: clicks, keys, drags), drive-moves.py (arrows, moves, the film),
+           all.py (every picker entry on contact sheets); each says how to run it at the top. Serve dist/ on port
+           8765 first: (cd dist && python3 -m http.server 8765). build.sh deletes dist/, so restart the server
+           after every build or it serves nothing. reviews/ holds the briefs given to the reviewing agents.
 
 Run tests from this folder: node test/run.js
