@@ -1,7 +1,9 @@
 // node test/rings.js   the ring rule (core/lewis.js, 7 Nov 2026): two neighbouring ring atoms may share
 // one bond in the plane of a small ring (benzyne's third bond); an atom with two pi parts and no such
-// partner is refused (pyridine's C=N(+)=C); electrons in the ring's plane stay put in every structure
-// (pyridazine keeps its two nitrogen lone pairs); and the shapes that follow (benzyne flat).
+// partner is dropped (pyridine's C=N(+)=C; a phenyl anion whose ring would take its lone pair's place)
+// unless no structure has a partner (the ring allenes, which are drawn); electrons in the ring's plane
+// stay put in every structure (pyridazine keeps its two nitrogen lone pairs); and the shapes that
+// follow (benzyne flat, 1,2-cyclohexadiene drawn).
 import { nodeFromSmiles } from '../core/smiles.js';
 import { buildNode, enumerate } from '../core/lewis.js';
 import { relax } from '../core/geometry.js';
@@ -24,21 +26,41 @@ const counts = [
   ['cyclohexyne', 'C1CCC#CC1', 1, 'one triple bond in the ring'],
   ['2,3-pyridyne', 'c1cc#cnc1', 2, 'like benzyne'],
   ['1,2-naphthalyne', 'C1=CC#CC2=CC=CC=C12', 3, 'like naphthalene'],
-  ['pyridine', 'c1ccncc1', 2, 'C=N(+)=C still refused'],
+  ['pyridine', 'c1ccncc1', 2, 'C=N(+)=C still refused: the N keeps its lone pair in the plane'],
   ['pyridazine', 'c1ccnnc1', 2, 'no N(+)#N(+) form: the nitrogens keep their in-plane lone pairs'],
   ['1,2,3-triazine', 'c1cnnnc1', 2, 'likewise'],
   ['benzene', 'c1ccccc1', 2, 'unchanged'],
   ['naphthalene', 'c1ccc2ccccc2c1', 3, 'unchanged'],
   ['furan', 'c1ccoc1', 5, 'unchanged: the O keeps one lone pair in the plane in all five'],
+  ['1,2-cyclohexadiene', 'C1CC=C=CC1', 1, 'its own only structure: no partner anywhere, so the middle carbon keeps its second bond'],
+  ['1,2-cyclopentadiene', 'C1CC=C=C1', 1, 'likewise'],
+  ['1,2-cycloheptadiene', 'C1CCC=C=CC1', 1, 'likewise'],
+  ['1,2,3-cyclohexatriene', 'C1CC=C=C=C1', 1, 'likewise'],
 ];
 for (const [name, smi, want, why] of counts) {
   const { r, error } = run(smi);
   const got = r ? r.structures.length : error;
   say(got === want, `${name}: ${got} structures (want ${want}: ${why})`);
 }
+// the phenyl anion keeps its lone pair on the bare carbon, in the plane (dropping the pairing part
+// outright moved it out of the plane onto a ring CH and broke the third benzyne scene)
 {
-  const { error } = run('C1CC=C=CC1');
-  say(!!error, `1,2-cyclohexadiene refused (its middle carbon has two pi parts and no partner in the plane): ${error}`);
+  const { node, r } = run('[c-]1ccccc1.[Na+]');
+  const bare = node.atoms.findIndex((a, i) => a.el === 'C' && !node.edges.some(e => e.includes(i) && node.atoms[e[0] === i ? e[1] : e[0]].el === 'H'));
+  say(r.structures.length === 2 && r.structures.every(st => st.charge[bare] === -1 && st.lone[bare] === 2),
+    `phenyl anion: ${r.structures.length} structures, the minus and the lone pair on the bare carbon in each`);
+}
+
+// 1,2-cyclohexadiene drawn: the ring closes, its bonds near their lengths (precision is the geometric
+// view's job, item 67)
+{
+  const { node, r } = run('C1CC=C=CC1');
+  const geo = relax(node, r);
+  const p = geo.pos;
+  const ds = node.edges.map(([i, j], k) => ({ d: len(sub(p[i], p[j])), o: r.avg.orders[k], h: node.atoms[i].el === 'H' || node.atoms[j].el === 'H' }))
+    .filter(e => !e.h);
+  const ok = ds.every(e => (e.o === 2 ? e.d > 1.25 && e.d < 1.4 : e.d > 1.45 && e.d < 1.6));
+  say(ok, `1,2-cyclohexadiene drawn: ring bonds ${ds.map(e => e.d.toFixed(2)).join(' ')} A`);
 }
 
 // benzyne's shape: flat, the in-plane bond between a double and a triple bond in length

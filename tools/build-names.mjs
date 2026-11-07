@@ -128,13 +128,15 @@ function readRows(dir, files) {
 
 // every row through the engine on two workers, each compound given LIMIT_MS (a worker that takes
 // longer is stopped and a fresh one started)
-// Results are kept in tools/.names-cache.json (not in git) under a hash of the core's code, so that
-// a second build with the same engine runs only what it has not seen.
+// Results are kept in tools/.names-cache.json (not in git) under a hash of the code the run uses (the
+// files below, not moves.js, reactions.js or the others), so that a second build with the same engine
+// runs only what it has not seen.
 async function runEngine(all, here) {
   const { createHash } = await import('node:crypto');
   const { readdirSync, existsSync } = await import('node:fs');
   const coreDir = path.join(path.dirname(here), '..', 'core');
-  const engine = createHash('sha1').update(readdirSync(coreDir).sort().map(f => readFileSync(path.join(coreDir, f), 'utf8')).join('\n')).digest('hex');
+  const used = ['elements.js', 'geometry.js', 'lewis.js', 'names.js', 'smiles.js', 'symmetry.js', 'vectors.js'];
+  const engine = createHash('sha1').update(used.map(f => readFileSync(path.join(coreDir, f), 'utf8')).join('\n')).digest('hex');
   const cacheFile = path.join(path.dirname(here), '.names-cache.json');
   let cache = { engine, results: {} };
   if (existsSync(cacheFile)) { try { const c = JSON.parse(readFileSync(cacheFile, 'utf8')); if (c.engine === engine) cache = c; } catch (e) { /* start afresh */ } }

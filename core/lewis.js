@@ -139,10 +139,14 @@ export function enumerate(node) {
   // Ring rule (7 Nov 2026, replacing the rule that refused benzyne). A ring of seven or fewer atoms
   // cannot straighten an atom, so a ring atom keeps one orbital above and below the ring and, if it
   // has only two neighbours, one orbital in the plane of the ring pointing outward. A second pi part
-  // at a ring atom has to use that in-plane orbital, and it can only bond with the in-plane orbital
-  // of a neighbour doing the same: two neighbouring ring atoms share one bond in the plane. That is
-  // benzyne's third bond. So (1) the ring atoms with two pi parts must pair off along bonds of order
-  // two or more between them; pyridine's C=N(+)=C has no partner for N and is refused, as before.
+  // at a ring atom has to use that in-plane orbital, and it bonds best with the in-plane orbital of a
+  // neighbour doing the same: two neighbouring ring atoms share one bond in the plane. That is
+  // benzyne's third bond. So (1) the ring atoms with two pi parts pair off along bonds of order two or
+  // more between them, unless no structure manages it (then the bond in the plane goes to a neighbour
+  // that has to twist to take it, as in a ring allene such as 1,2-cyclohexadiene: drawn, not precise,
+  // item 67). Like the octet target and the charge-size rule, it keeps the structures that pass and
+  // never refuses the molecule. Pyridine's C=N(+)=C has no partner for N and is dropped, as before;
+  // so is a phenyl anion whose ring would take the lone pair's place in the plane.
   // (2) Electrons in the plane of the ring do not move between structures; only those above and
   // below it do (the two sets of orbitals are at right angles). Each two-neighbour ring atom's
   // in-plane orbital holds the in-plane bond, a lone pair, one electron or nothing, and every
@@ -183,8 +187,7 @@ export function enumerate(node) {
       };
       return match(0);
     };
-    structures = structures.filter(paired);
-    if (!structures.length) throw new Error('no Lewis structure fits the ring');
+    if (structures.some(paired)) structures = structures.filter(paired);
     const inPlane = s => {
       const pi = piAt(s);
       return [...smallRing].filter(i => free(i) && sigma[i] === 2)
