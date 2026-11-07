@@ -6,14 +6,15 @@ import { OrbitControls } from './vendor/OrbitControls.js';
 import { CASES, runCase } from './core/cases.js';
 import { nodeFromSmiles, toSmiles } from './core/smiles.js';
 import { buildNode, enumerate, ENGINE } from './core/lewis.js';
-import { relax } from './core/geometry.js';
+import { relax, electronGroups } from './core/geometry.js';
 import { piFrame } from './core/pi.js';
 import { structureFamilies } from './core/symmetry.js';
 import { ELEMENTS } from './core/elements.js';
 import { attachEditor } from './edit.js';
 import { attachArrows } from './arrows.js';
 import { commit, filmSteps, combine } from './core/moves.js';
-import { REACTIONS, resolveArrows, pieceFormulas } from './core/reactions.js';
+import { resolveArrows, pieceFormulas } from './core/reactions.js';
+import { MECHANISMS, nextShape, carryOver } from './core/mechanisms.js';
 import { makeIndex, search, namesFor, reasonText, balanceSmiles } from './core/names.js';
 
 // ---------- timing ----------
@@ -23,6 +24,8 @@ const MOVE = 800;     // ms for the camera to travel to a newly loaded molecule
 const LINEUP = 1500;  // ms for the molecules to come together and line up before the film (items 69, 76)
 const FILM = 5500;    // ms for the film itself, from the reagents to the products (item 76)
 const MOVIE = LINEUP + FILM;
+const PASSAGE = 1600; // ms between two steps of a mechanism: what the next step does not use leaves, what it needs comes in
+const ARROWS_FIRST = 900; // ms the textbook arrows stay drawn before forward plays the step
 
 // ---------- sizes, all in angstrom ----------
 const LINE = 0.055;       // radius of every bond line, single or one of a double
@@ -441,19 +444,26 @@ const tracked = [];          // sprites placed relative to the camera every fram
 let editor = null;           // set up at the end, once the page exists
 let arrows = null;           // the curved arrows, set up at the end too
 let movie = null;            // a move playing: { node, steps, start, out, shown }
+let passage = null;          // between two steps of a mechanism: { from, to, start, shown, then }
+let mech = null;             // a mechanism on screen: { m, station, films, passages, pending }
 
 let cutNote = '';             // after an edit: the bonds the octet left no room for
 function load(entry, animate) {
-  movie = null;
+  movie = null; passage = null;
+  leaveMechanism();
   cutNote = '';
   if (entry.kind === 'case') {
     const { node, r } = runCase(entry.c);
     show(null, node, r, null, animate);
+  } else if (entry.kind === 'mechanism') {
+    loadSpec(nodeFromSmiles(entry.m.steps[0].smiles), null, animate);
   } else {
     loadSpec(nodeFromSmiles(entry.smiles), null, animate);
   }
-  if (current) current.reaction = entry.kind === 'reaction' ? entry.rx : null;
+  if (current) current.reaction = entry.kind === 'mechanism' ? entry.m.steps[0] : null;
+  if (entry.kind === 'mechanism') mech = { m: entry.m, station: 0, films: [], passages: [], pending: null };
   showHint();
+  updateMech();
 }
 
 // a molecule given as atoms, adjacency and charge (from a SMILES or from editing); `start` holds
@@ -534,6 +544,7 @@ function show(spec, node, r, start, animate) {
 
 function shownStructure() {
   if (movie) return movie.shown;
+  if (passage) return passage.shown;
   const { r, families, main } = current;
   return showResonance ? r.structures[families[familyIdx][memberIdx]] : r.structures[main];
 }
@@ -951,15 +962,16 @@ function updateTip() {
 }
 
 // ---------- panel ----------
-// The reaction scenes (and the SN2 transition state) in a short list; compounds come from the search.
+// The mechanisms, one entry each (item 72), and the SN2 transition state, in a short list; compounds
+// come from the search.
 const sel = document.getElementById('case');
 const ENTRIES = [
-  ...REACTIONS.map(rx => ({ kind: 'reaction', name: rx.name, smiles: rx.smiles, rx, group: 'reactions' })),
+  ...MECHANISMS.map(m => ({ kind: 'mechanism', name: m.name, m, group: 'mechanisms' })),
   ...CASES.filter(c => c.before).map(c => ({ kind: 'case', name: c.name, c, group: 'transitions' })),
 ];
 {
-  const o = document.createElement('option'); o.value = ''; o.textContent = 'reaction scenes…'; sel.appendChild(o);
-  for (const groupName of ['reactions', 'transitions']) {
+  const o = document.createElement('option'); o.value = ''; o.textContent = 'mechanisms…'; sel.appendChild(o);
+  for (const groupName of ['mechanisms', 'transitions']) {
     const og = document.createElement('optgroup');
     og.label = groupName;
     ENTRIES.forEach((e, i) => { if (e.group !== groupName) return; const op = document.createElement('option'); op.value = i; op.textContent = e.name; og.appendChild(op); });
@@ -976,7 +988,10 @@ sel.addEventListener('change', () => {
   if (sel.value === '') return;
   const entry = ENTRIES[Number(sel.value)];
   sel.value = ''; sel.blur();
-  if (tryLoad(entry)) { onScreen(entry.name); subBox.textContent = entry.kind === 'reaction' ? 'reagents placed together' : 'before and after at equal weight'; }
+  if (tryLoad(entry)) {
+    onScreen(entry.name);
+    subBox.textContent = entry.kind === 'mechanism' ? 'reagents placed together' : 'before and after at equal weight';
+  }
 });
 
 // ---------- the search: a name or a SMILES ----------
@@ -1131,6 +1146,8 @@ document.getElementById('search-form').addEventListener('submit', e => e.prevent
 
 // a second compound beside what is on screen, so a reagent can be brought in
 function addBeside(smiles) {
+  if (passage) return false;
+  leaveMechanism();
   if (!current || !current.spec || movie) { errBox.textContent = 'there is nothing to add it to; it is loaded on its own instead'; return tryLoad({ kind: 'smiles', name: smiles, smiles }); }
   try {
     const other = nodeFromSmiles(smiles);
@@ -1175,6 +1192,7 @@ function stepFamily(d) {
   showStructure(true);
 }
 function togglePause() {
+  if (passage) return;
   if (movie) {
     // space holds the film where it is, and lets it go on
     const now = performance.now();
@@ -1204,7 +1222,8 @@ function updatePanel() {
   if (movie) {
     const made = movie.out.made.length, broken = movie.out.broken.length;
     // the products are not named until the film has shown them
-    const lines = [movie.pausedAt === null ? '<b>the move</b> is playing (space holds it)' : '<b>the move</b> is held (space goes on)', `${made} bond${made === 1 ? '' : 's'} made, ${broken} broken`];
+    const playing = movie.reverse ? 'is playing backwards' : 'is playing';
+    const lines = [movie.pausedAt === null ? `<b>the move</b> ${playing} (space holds it)` : '<b>the move</b> is held (space goes on)', movie.reverse ? `${broken} bond${broken === 1 ? '' : 's'} made, ${made} broken` : `${made} bond${made === 1 ? '' : 's'} made, ${broken} broken`];
     document.getElementById('status').innerHTML = lines.map(l => `<div>${l}</div>`).join('');
     document.getElementById('steps').style.visibility = 'hidden';
     return;
@@ -1234,6 +1253,7 @@ function animate(t) {
   lastT = t;
   if (move) stepMove(t);
   if (movie) stepMovie(t);
+  else if (passage) stepPassage(t);
   if (current) {
     if (fade) {
       const f = Math.min(1, (t - fade.start) / FADE);
@@ -1243,7 +1263,7 @@ function animate(t) {
       if (f >= 1) finishFade();
     }
     const family = current.families[familyIdx];
-    const held = (arrows && arrows.count()) || movie;   // arrows drawn: the picture stays put
+    const held = (arrows && arrows.count()) || movie || passage;   // arrows drawn: the picture stays put
     if (showResonance && !paused && family.length > 1 && !fade && !held && t - lastSwitch > DWELL) {
       memberIdx = (memberIdx + 1) % family.length;
       lastSwitch = t;
@@ -1263,8 +1283,9 @@ editor = attachEditor({
   getSpec: () => (current ? current.spec : { atoms: [], adj: [], charge: 0 }),
   getPositions: () => (current ? current.geo.pos : []),
   atomMeshes: () => atomGroup.children.filter(o => o.userData.atom !== undefined),
-  isEditable: () => !current || !!current.spec,
+  isEditable: () => (!current || !!current.spec) && !passage,
   loadSpec: (spec, start) => {
+    leaveMechanism();
     loadSpec(spec, start);
     // the box names what is on screen now, if the list has it
     nameOnScreen(current ? 'edited molecule' : 'nothing on screen');
@@ -1292,29 +1313,35 @@ arrows = attachArrows({
   pairSprites: () => tracked.filter(t => t.kind === 'pair').map(t => ({ sprite: t.sprite, index: t.index })),
   bondMeshes: () => { const out = []; structureGroup.traverse(o => { if (o.isMesh && o.userData.edge !== undefined && o.visible) out.push(o); }); return out; },
   atomMeshes: () => atomGroup.children.filter(o => o.userData.atom !== undefined),
-  isAllowed: () => !!current && !!current.spec && !movie && !move,
+  isAllowed: () => !!current && !!current.spec && !movie && !move && !passage,
   setNote: text => { document.getElementById('note').textContent = text; },
   onCommit: makeMove,
   onChange: count => { document.getElementById('go').disabled = !count; document.getElementById('undo').disabled = !count; },
 });
 document.getElementById('go').addEventListener('click', e => { arrows.commit(); e.target.blur(); });
 document.getElementById('undo').addEventListener('click', e => { arrows.clear(); e.target.blur(); });
-document.getElementById('show').addEventListener('click', e => {
-  e.target.blur();
-  if (!current || !current.reaction || movie) return;
-  // the textbook arrows are drawn on the structure where every tail exists; switch to it if needed
+// the textbook arrows of the scene on screen, and the structure they are drawn on (one where every
+// tail exists: the shown one if it has them)
+function textbookArrows() {
   const list = resolveArrows(current.spec, current.reaction.arrows);
   const fits = st => list.every(a => ('pair' in a.from ? st.lone[a.from.pair] >= 2 : (() => { const k = current.r.edges.findIndex(e => (e[0] === a.from.bond[0] && e[1] === a.from.bond[1]) || (e[0] === a.from.bond[1] && e[1] === a.from.bond[0])); return k >= 0 && st.orders[k] >= 1; })()));
-  if (!fits(shownStructure())) {
-    const q = current.r.structures.findIndex(fits);
-    if (q >= 0) {
-      const fi = current.families.findIndex(f => f.includes(q));
-      showResonance = true; resonanceBox.checked = true;
-      familyIdx = fi; memberIdx = current.families[fi].indexOf(q); lastSwitch = performance.now();
-      showStructure(true);
-    }
+  const q = fits(shownStructure()) ? -1 : current.r.structures.findIndex(fits);
+  return { list, q, structure: q >= 0 ? current.r.structures[q] : shownStructure() };
+}
+function showTextbookArrows() {
+  const { list, q } = textbookArrows();
+  if (q >= 0) {
+    const fi = current.families.findIndex(f => f.includes(q));
+    showResonance = true; resonanceBox.checked = true;
+    familyIdx = fi; memberIdx = current.families[fi].indexOf(q); lastSwitch = performance.now();
+    showStructure(true);
   }
   arrows.set(list);
+}
+document.getElementById('show').addEventListener('click', e => {
+  e.target.blur();
+  if (!current || !current.reaction || movie || passage) return;
+  showTextbookArrows();
 });
 function showHint() {
   document.getElementById('show').style.display = current && current.reaction ? '' : 'none';
@@ -1338,49 +1365,93 @@ function makeMove(list) {
     arrows.note('no bond made or broken: that is resonance, another picture of the same molecule, shown now');
     return;
   }
+  // in a mechanism, a move whose products are the step's own is the step, whoever drew the arrows;
+  // any other move leaves the mechanism
+  if (mech && mech.station < mech.m.steps.length && current.reaction === mech.m.steps[mech.station]) {
+    const k = mech.station;
+    const tb = textbookArrows();
+    const book = commit(node, tb.structure, tb.list, r);
+    if (book.kind === 'move' && sameSpec(out.spec, book.spec)) {
+      const cached = mech.films[k];
+      playMove(out, { mech: k, film: cached && sameSpec(cached.out.spec, out.spec, true) ? cached.film : null });
+      return;
+    }
+    leaveMechanism();
+  }
   playMove(out);
+}
+// two specs that are the same molecules: carried over whole, nothing leaving or coming in (strict: atom
+// for atom, the same adjacency in the same order)
+function sameSpec(a, b, strict = false) {
+  if (strict) return JSON.stringify(a.adj.map(e => [...e].sort((x, y) => x - y)).sort()) === JSON.stringify(b.adj.map(e => [...e].sort((x, y) => x - y)).sort()) && a.atoms.length === b.atoms.length;
+  const c = carryOver(a, b);
+  return !c.leaving.length && !c.arriving.length && c.map.every(x => x >= 0);
 }
 
 // The move as a short film (item 15): the weights blend from all-before to all-after, so every bond
 // order and charge slides from its old value to its new one; the shape follows, relaxed step by
-// step; at the end the products are loaded as the molecule on screen.
-function playMove(out) {
-  const film = filmSteps(current.node, out, current.geo, 21);
+// step; at the end the products are loaded as the molecule on screen. opts.film: the film of this
+// very move, already made (a mechanism's step played again); opts.mech: the step of the mechanism
+// this move is.
+function playMove(out, opts = {}) {
+  const film = opts.film || filmSteps(current.node, out, current.geo, 21);
   const { node, steps, roles, endPos, lineup } = film;
+  const before = { spec: current.spec, node: current.node, r: current.r, families: current.families, main: current.main };
   arrows.clear();
   finishFade();
   const products = pieceFormulas(out.spec, out.after);
   // the film begins on the picture the arrows were drawn on and ends on the picture the products will
   // show, so nothing jumps when it starts or when the products are loaded (a ring of five structures
   // turned from one picture to their average the moment the film began; moves review, 7 Nov 2026)
-  const lift = (st, edges) => {
-    const at = new Map(edges.map((e, k) => [`${e[0]}-${e[1]}`, k]));
-    return { ...st, orders: out.hybrid.edges.map(e => { const k = at.get(`${e[0]}-${e[1]}`); return k === undefined ? 0 : st.orders[k]; }) };
-  };
   const { main, families } = mainAndFamilies(out.after, out.rAfter);
-  const first = lift(shownStructure(), current.r.edges);
-  const last = lift(out.rAfter.structures[showResonance ? families[0][0] : main], out.rAfter.edges);
-  movie = { node, steps, roles, lineup, first, last, start: performance.now(), out, products, shown: null, endPos, pausedAt: null };
+  const first = liftTo(out, shownStructure(), current.r.edges);
+  const last = liftTo(out, out.rAfter.structures[showResonance ? families[0][0] : main], out.rAfter.edges);
+  movie = { film, node, steps, roles, lineup, first, last, start: performance.now(), out, products, shown: null, endPos, pausedAt: null, reverse: false, mech: opts.mech ?? null, before };
+  startMovie(steps[0]);
+  arrows.note('watch the bonds, pairs and charges change; hover an atom for its numbers');
+}
+// a structure of one end of a move, over the pairs of the film (order 0 on the pairs it lacks)
+function liftTo(out, st, edges) {
+  const at = new Map(edges.map((e, k) => [`${e[0]}-${e[1]}`, k]));
+  return { ...st, orders: out.hybrid.edges.map(e => { const k = at.get(`${e[0]}-${e[1]}`); return k === undefined ? 0 : st.orders[k]; }) };
+}
+// A step of a mechanism played backwards (item 85): the same film from its last frame to its first,
+// starting on the picture on screen and ending on the picture the reagents had.
+function playBack(entry) {
+  const { film, out, before } = entry;
+  const { node, steps, roles, endPos, lineup } = film;
+  arrows.clear();
+  finishFade();
+  const first = liftTo(out, before.r.structures[showResonance ? before.families[0][0] : before.main], before.r.edges);
+  const last = liftTo(out, shownStructure(), current.r.edges);
+  movie = { film, node, steps, roles, lineup, first, last, start: performance.now(), out, products: pieceFormulas(out.spec, out.after), shown: null, endPos, pausedAt: null, reverse: true, mech: mech.station - 1, before };
+  startMovie(steps[steps.length - 1]);
+  arrows.note('the step backwards: every step can run either way');
+}
+function startMovie(at) {
+  const { node, steps } = movie;
   // the camera draws back at the start, if it must, so that nothing leaves the picture during the film
   const every = { atoms: steps.flatMap(() => node.atoms) };
   const everyGeo = { pos: steps.flatMap(st => st.geo.pos) };
   if (outOfView(everyGeo, every)) moveCamera(frameFor(every, everyGeo, null, { dir: camera.position.clone().sub(controls.target).normalize(), up: camera.up }), true);
-  current = { ...current, node, r: steps[0].r, geo: steps[0].geo };
+  current = { ...current, node, r: at.r, geo: at.geo };
   buildAtoms();
   stepMovie(performance.now());
   updatePanel();
-  arrows.note('watch the bonds, pairs and charges change; hover an atom for its numbers');
+  updateMech();
 }
 function movieMix() { return movie && movie.shown ? movie.mix : 0; }
 function stepMovie(t) {
   if (movie.pausedAt !== null) return;
   const f = Math.min(1, (t - movie.start) / MOVIE);
+  // backwards, the same frames from the end to the start
+  const g = movie.reverse ? 1 - f : f;
   const last = movie.steps.length - 1, L = movie.lineup;
   // the lineup first (the molecules come together, each turning and sliding as a whole), then the
   // film: the blend, then the products settling, each eased
   const ease = v => v * v * (3 - 2 * v);
-  const fl = LINEUP / MOVIE, h = (f - fl) / (1 - fl);
-  const x = f < fl ? ease(f / fl) * L : h < 0.85 ? L + ease(h / 0.85) * (last - 1 - L) : (last - 1) + ease((h - 0.85) / 0.15);
+  const fl = LINEUP / MOVIE, h = (g - fl) / (1 - fl);
+  const x = g < fl ? ease(g / fl) * L : h < 0.85 ? L + ease(h / 0.85) * (last - 1 - L) : (last - 1) + ease((h - 0.85) / 0.15);
   const k = Math.min(last - 1, Math.floor(x));
   const u = x - k;
   const a = movie.steps[k], b = movie.steps[k + 1];
@@ -1390,7 +1461,7 @@ function stepMovie(t) {
   // lineup, then the weights blend from before to after, then from that average to the picture the
   // products will show during the settle
   const A = movie.steps[0].r.avg, B = movie.steps[last].r.avg;
-  const [P, Q, w] = f < fl ? [movie.first, A, ease(f / fl)] : h < 0.85 ? [A, B, mix] : [B, movie.last, ease((h - 0.85) / 0.15)];
+  const [P, Q, w] = g < fl ? [movie.first, A, ease(g / fl)] : h < 0.85 ? [A, B, mix] : [B, movie.last, ease((h - 0.85) / 0.15)];
   const blend = key => P[key].map((v, i) => v + (Q[key][i] - v) * w);
   const orders = blend('orders'), lone = blend('lone');
   // the electrons an atom counts, from the pairs and bonds drawn (a leaving bromide counts its eight
@@ -1404,8 +1475,10 @@ function stepMovie(t) {
   atomGroup.children.forEach(o => { if (o.userData.atom !== undefined) o.position.set(...pos[o.userData.atom]); });
   swapStructure(buildStructure(), false);
   if (f >= 1) {
-    const out = movie.out, endPos = movie.endPos;
+    const done = movie;
     movie = null;
+    if (done.reverse) { backDone(done); return; }
+    const out = done.out, endPos = done.endPos;
     loadSpec(out.spec, endPos, true);
     // the products may have drawn together or come apart: fit the picture to them, gently
     moveCamera(frameFor(current.node, current.geo, null, { dir: camera.position.clone().sub(controls.target).normalize(), up: camera.up }), true);
@@ -1415,6 +1488,177 @@ function stepMovie(t) {
     current.reaction = null; showHint();
     const made = out.made.length, broken = out.broken.length;
     arrows.note(`done: ${made} bond${made === 1 ? '' : 's'} made, ${broken} broken. Drag from a pair of dots or a bond to draw the next arrow`);
+    if (mech && done.mech !== null) {
+      // a step of the mechanism: kept, so it can be played backwards and again forwards unchanged
+      const k = done.mech;
+      mech.films[k] = { film: done.film, out, before: done.before };
+      mech.station = k + 1;
+      if (mech.station < mech.m.steps.length) startPassage(mech.station, true);
+      else arrows.note(`done: ${made} bond${made === 1 ? '' : 's'} made, ${broken} broken. The back button plays it backwards`);
+    }
+    updateMech();
+  }
+}
+// the end of a step played backwards: the reagents of that step, as they were
+function backDone(done) {
+  const k = done.mech;
+  loadSpec(done.before.spec, done.steps[0].geo.pos, true);
+  mech.station = k;
+  current.reaction = mech.m.steps[k]; showHint();
+  if (k === 0) onScreen(mech.m.name); else nameOnScreen(`before step ${k + 1}`);
+  subBox.textContent = `before step ${k + 1}: ${pieceFormulas(done.before.spec).join(', ')}`;
+  errBox.textContent = '';
+  arrows.note('back where the step began; forward plays it again');
+  updateMech();
+}
+
+// ---------- mechanisms: one entry, its steps forward and back (items 72, 85) ----------
+function leaveMechanism() {
+  if (!mech) return;
+  if (mech.pending) clearTimeout(mech.pending);
+  mech = null;
+  updateMech();
+}
+function updateMech() {
+  const box = document.getElementById('mech');
+  if (!mech) { box.style.display = 'none'; return; }
+  box.style.display = '';
+  const n = mech.m.steps.length, k = mech.station;
+  const busy = !!(movie || passage || mech.pending);
+  document.getElementById('mech-back').disabled = busy || k === 0;
+  document.getElementById('mech-fwd').disabled = busy || k >= n || !current || current.reaction !== mech.m.steps[k];
+  const one = n === 1;
+  let where, label;
+  if (movie && movie.mech !== null) {
+    where = `${one ? 'the step' : `step <b>${movie.mech + 1}</b> of ${n}`}${movie.reverse ? ', backwards' : ''}`;
+    label = mech.m.steps[movie.mech].label;
+  } else if (passage) {
+    where = `on to step <b>${passage.k + 1}</b> of ${n}`;
+    label = passage.words;
+  } else if (k < n) {
+    where = one ? 'before the step' : `before step <b>${k + 1}</b> of ${n}`;
+    label = mech.m.steps[k].label;
+  } else {
+    where = one ? 'after the step' : `after step <b>${n}</b> of ${n}`;
+    label = mech.m.steps[n - 1].label;
+  }
+  document.getElementById('mech-line').innerHTML = `${where}<br>${label}`;
+}
+// forward: the step's textbook arrows drawn, a moment to see them, then the move
+function mechForward() {
+  if (!mech || movie || passage || mech.pending || !current) return;
+  const k = mech.station;
+  if (k >= mech.m.steps.length || current.reaction !== mech.m.steps[k]) return;
+  showTextbookArrows();
+  mech.pending = setTimeout(() => {
+    if (!mech) return;
+    mech.pending = null;
+    arrows.commit();
+    updateMech();
+  }, ARROWS_FIRST);
+  updateMech();
+}
+// back: the step before played backwards (between two steps, what came in leaves first)
+function mechBack() {
+  if (!mech || movie || passage || mech.pending) return;
+  const k = mech.station, n = mech.m.steps.length;
+  if (k === 0 || !mech.films[k - 1]) return;
+  arrows.clear();
+  if (k < n) startPassage(k, false);
+  else playBack(mech.films[k - 1]);
+}
+document.getElementById('mech-fwd').addEventListener('click', e => { e.currentTarget.blur(); mechForward(); });
+document.getElementById('mech-back').addEventListener('click', e => { e.currentTarget.blur(); mechBack(); });
+
+// Between step k and step k+1 (k counted from 1): what the next step does not use leaves, sliding
+// out of the picture away from the rest; what it needs comes in from the right; what carries over
+// stays where it is (core/mechanisms.js). Made once and kept, so going back and forth repeats it.
+function makePassage(k) {
+  const P = current.spec, pPos = current.geo.pos.map(q => [...q]), pNode = current.node;
+  camera.matrixWorld.extractBasis(camRight, camUp, camBack);
+  const right = [camRight.x, camRight.y, camRight.z];
+  const S = nodeFromSmiles(mech.m.steps[k].smiles);
+  const { carry, pos: sPos } = nextShape(P, pPos, S, right);
+  const arriving = carry.arriving.flat();
+  const uIndex = new Map(arriving.map((i, q) => [i, P.atoms.length + q]));
+  const spec = {
+    atoms: [...P.atoms.map(a => ({ ...a })), ...arriving.map(i => ({ ...S.atoms[i] }))],
+    adj: [...P.adj, ...S.adj.filter(([i, j]) => uIndex.has(i) && uIndex.has(j)).map(([i, j]) => [uIndex.get(i), uIndex.get(j)])],
+    charge: P.charge + carry.arrivingCharge,
+  };
+  const node = buildNode(spec), r = enumerate(node);
+  // far enough to be out of the picture
+  const dist = camera.position.distanceTo(controls.target);
+  const D = dist * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * camera.aspect * 1.5 + 4;
+  const mean = list => list.reduce((s, p) => [s[0] + p[0], s[1] + p[1], s[2] + p[2]], [0, 0, 0]).map(v => v / Math.max(1, list.length));
+  const keptAt = mean(carry.map.filter(c => c >= 0).map(c => pPos[c]));
+  const sOf = new Map(); carry.map.forEach((c, s) => { if (c >= 0) sOf.set(c, s); });
+  const shifted = (p, d) => [p[0] + d[0] * D, p[1] + d[1] * D, p[2] + d[2] * D];
+  const uIn = [...pPos.map(q => [...q]), ...arriving.map(i => shifted(sPos[i], right))];
+  const uOut = [...pPos.map((q, p) => (sOf.has(p) ? [...sPos[sOf.get(p)]] : [...q])), ...arriving.map(i => [...sPos[i]])];
+  for (const members of carry.leaving) {
+    // away from what stays, across the screen
+    const c = mean(members.map(i => pPos[i]));
+    const d = new THREE.Vector3(c[0] - keptAt[0], c[1] - keptAt[1], c[2] - keptAt[2]);
+    d.addScaledVector(camBack, -d.dot(camBack));
+    if (d.length() < 0.5) d.copy(camRight).multiplyScalar(-1);
+    d.normalize();
+    members.forEach(i => { uOut[i] = shifted(pPos[i], [d.x, d.y, d.z]); });
+  }
+  const { main, families } = mainAndFamilies(node, r);
+  const words = (sp, groups) => groups.map(members => {
+    const at = new Map(members.map((i, q) => [i, q]));
+    const sub = { atoms: members.map(i => ({ ...sp.atoms[i] })), adj: sp.adj.filter(([i, j]) => at.has(i) && at.has(j)).map(([i, j]) => [at.get(i), at.get(j)]), charge: members.reduce((s, i) => s + (sp.atoms[i].written || 0), 0) };
+    const named = namesFor(names, sub);
+    return named ? named.join(' + ') : pieceFormulas(sub).join(' + ');
+  });
+  const said = (list, one, many) => (list.length ? `${list.join(' and ')} ${list.length === 1 ? one : many}` : '');
+  const came = said(words(S, carry.arriving), 'comes in', 'come in'), left = said(words(P, carry.leaving), 'leaves', 'leave');
+  return {
+    k, P, pPos, pNode, S, sPos, sNode: buildNode(S), carry, uIn, uOut,
+    U: { spec, node, r, geo: { pos: uIn, groups: electronGroups(node, r) }, main, families },
+    words: [came, left].filter(Boolean).join('; ') || 'nothing comes or goes',
+  };
+}
+function startPassage(k, forward) {
+  let p = mech.passages[k];
+  if (!p) { if (!forward) return; p = mech.passages[k] = makePassage(k); }
+  const { U } = p;
+  finishFade();
+  current = { spec: U.spec, node: U.node, r: U.r, geo: { ...U.geo, pos: (forward ? p.uIn : p.uOut).map(q => [...q]) }, families: U.families, main: U.main, reaction: null };
+  passage = { k, words: p.words, from: forward ? p.uIn : p.uOut, to: forward ? p.uOut : p.uIn, start: performance.now(), shown: U.r.structures[U.main], forward, p };
+  showHint();
+  buildAtoms();
+  swapStructure(buildStructure(), false);
+  hideTip();
+  updatePanel();
+  // the camera goes to the picture the passage ends on while it plays
+  const end = forward ? { node: p.sNode, pos: p.sPos } : { node: p.pNode, pos: p.pPos };
+  moveCamera(frameFor(end.node, { pos: end.pos }, null, { dir: camera.position.clone().sub(controls.target).normalize(), up: camera.up }), true);
+  arrows.note(forward ? `between the steps: ${p.words}` : 'between the steps, backwards');
+  updateMech();
+}
+function stepPassage(t) {
+  const f = Math.min(1, (t - passage.start) / PASSAGE);
+  const e = f * f * (3 - 2 * f);
+  const pos = passage.from.map((p, i) => p.map((v, q) => v + (passage.to[i][q] - v) * e));
+  current.geo = { ...current.geo, pos };
+  atomGroup.children.forEach(o => { if (o.userData.atom !== undefined) o.position.set(...pos[o.userData.atom]); });
+  swapStructure(buildStructure(), false);
+  if (f < 1) return;
+  const { k, forward, p } = passage;
+  passage = null;
+  if (forward) {
+    loadSpec(p.S, p.sPos, true);
+    current.reaction = mech.m.steps[k]; showHint();
+    nameOnScreen(`before step ${k + 1}`);
+    subBox.textContent = p.words;
+    arrows.note(`step ${k + 1}: forward plays it, or draw the arrows yourself`);
+    updateMech();
+  } else {
+    loadSpec(p.P, p.pPos, true);
+    current.reaction = null; showHint();
+    playBack(mech.films[k - 1]);
   }
 }
 document.getElementById('clear').addEventListener('click', e => { editor.clear(); e.target.blur(); });
@@ -1452,6 +1696,8 @@ window.electronFlow = {
   pairs: () => tracked.filter(t => t.kind === 'pair').map(t => ({ index: t.index, pos: t.sprite.position.toArray() })),
   arrows: () => (arrows ? arrows.arrows() : []),
   playing: () => !!movie,
+  // a mechanism on screen: its name, how many steps, which station (0 before step 1), whether busy
+  mechanism: () => (mech ? { name: mech.m.name, steps: mech.m.steps.length, station: mech.station, busy: !!(movie || passage || mech.pending), atoms: current ? current.node.atoms.length : 0 } : null),
   smiles: () => (current && current.spec ? toSmiles(current.node, current.r.structures[current.main]) : ''),
   // hold the film at a fraction of its length (0 to 1), for frame-by-frame checks; null lets it go on
   holdFilm: f => {

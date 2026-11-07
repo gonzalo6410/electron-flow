@@ -44,6 +44,13 @@
   .steps { display: flex; width: 92px; margin-top: 10px; border: 1px solid #ccc; border-radius: 4px; overflow: hidden; }
   .steps button { flex: 1; font: inherit; font-size: 14px; color: var(--ink); background: #fff; border: 0; padding: 3px 0; cursor: pointer; }
   .steps button + button { border-left: 1px solid #ccc; }
+  .steps button:disabled { color: #ccc; cursor: default; }
+  /* a mechanism: back and forward through its steps, and where you are */
+  .mech { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+  .mech .steps { margin-top: 0; flex: none; }
+  .mech .steps button { font-size: 11px; padding: 4px 0; }
+  .mech-line { font-size: 12px; color: var(--mute); line-height: 1.35; min-width: 0; }
+  .mech-line b { color: var(--ink); font-weight: 500; }
   /* four short lines, always the same height, so the rules below never move */
   #status { margin-top: 12px; color: var(--mute); height: calc(4 * 1.4em); overflow: hidden; }
   #status div { height: 1.4em; white-space: nowrap; overflow: hidden; }
@@ -79,7 +86,8 @@
     <form id="search-form" class="search"><input id="search" type="text" placeholder="a name or a SMILES" spellcheck="false" autocomplete="off"><div id="hits" class="hits"></div></form>
     <div id="sub" class="sub"></div>
     <div id="error"></div>
-    <select id="case" class="scenes" title="reagents placed together, with the textbook arrows behind a button"></select>
+    <select id="case" class="scenes" title="a mechanism, step by step, forward and back"></select>
+    <div id="mech" class="mech" style="display:none"><div class="steps"><button id="mech-back" title="play the step before backwards">&#9664;&#xFE0E;</button><button id="mech-fwd" title="play the next step">&#9654;&#xFE0E;</button></div><div id="mech-line" class="mech-line"></div></div>
     <label class="switch"><input id="resonance" type="checkbox"><span class="track"></span><span>resonance structures</span></label>
     <div id="steps" class="steps"><button id="prev" title="previous structure (left arrow)">&#8592;</button><button id="next" title="next structure (right arrow)">&#8594;</button></div>
     <div id="status"></div>
@@ -93,7 +101,7 @@
     </details>
     <details class="fold">
       <summary>moves</summary>
-      <p>Drag from a pair of dots or from a bond to an atom or to a bond to draw an arrow for one pair of electrons. A lone pair can only become a bond to its own atom; a bond's pair can become a lone pair on one of its atoms or a bond from one of them to a third atom. Enter, or the button, makes the move: if no bond is made or broken the arrows show resonance and the picture changes to that structure; if a bond is made or broken the molecules first come together and line up, each turning and sliding as a whole, then the move plays from before to after, every bond and charge sliding to its new value. A move that would give an atom more than its octet, or leave a hydrogen with nothing, is refused with the reason. Pick a reaction to get the reagents placed together; the button shows the textbook arrows. To bring in a second compound, search for it and press add beside its name (or shift-enter).</p>
+      <p>Drag from a pair of dots or from a bond to an atom or to a bond to draw an arrow for one pair of electrons. A lone pair can only become a bond to its own atom; a bond's pair can become a lone pair on one of its atoms or a bond from one of them to a third atom. Enter, or the button, makes the move: if no bond is made or broken the arrows show resonance and the picture changes to that structure; if a bond is made or broken the molecules first come together and line up, each turning and sliding as a whole, then the move plays from before to after, every bond and charge sliding to its new value. A move that would give an atom more than its octet, or leave a hydrogen with nothing, is refused with the reason. Pick a mechanism to get the reagents placed together; the button shows the textbook arrows. The two small buttons under the list go through its steps: forward shows the step's arrows and plays it, back plays the step before backwards. Between two steps whatever the next one does not use leaves and what it needs comes in. Arrows of your own that give the same products count as the step; any other move leaves the mechanism. To bring in a second compound, search for it and press add beside its name (or shift-enter).</p>
     </details>
     <details class="fold">
       <summary>names</summary>

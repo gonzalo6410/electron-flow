@@ -1,7 +1,8 @@
 # Electron Flow. Copyright (c) 2026 Gonzalo Fernandez de la Mora. All rights reserved (see LICENSE).
 """Drive the moves on the Electron Flow page: python3 -I drive-moves.py SCRIPT OUT_PREFIX
 Steps (semicolon separated):
-  pick:TEXT          choose the picker entry whose name starts with TEXT
+  pick:TEXT          choose the picker entry (a mechanism, at its first step) whose name starts with TEXT
+  button:mech-fwd    forward through the mechanism's steps (button:mech-back plays the step before backwards)
   smiles:TEXT        type a name or a SMILES and press enter
   show               click "show the arrows"
   go                 press Enter (make the move)

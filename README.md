@@ -20,13 +20,18 @@ core/      chemistry, no dependence on any renderer
   moves.js      curved arrows applied to a structure: resonance, a move to a new node, or a refusal with the
                 reason; the node after a move; the transition hybrid at a run of mixes; the lineup before the film and the shapes of the film
   reactions.js  reaction scenes (reagents placed together) with their textbook arrows, and piece formulas
+  mechanisms.js the mechanisms, one entry each with its steps in order (each step a scene of reactions.js),
+                and the carry-over from one step's products to the next step's reagents: what stays, what
+                leaves, what comes in, and the shape the next step starts from
 test/      node test/run.js (known answers), families.js, pi.js, compounds.js (timings), geometry.js, extra.js,
            gradient.js (exact forces against finite differences), shapes.js (known-answer shapes), smiles.js
            (reading and writing SMILES), edit.js (editing operations), rdkit-agreed.js (138 recorded answers;
            rdkit-dump.js and rdkit-compare.py made them), rules-lab.js (candidate rules, prints only),
            moves.js (arrows on the basic mechanisms, refusals, hybrids), reactions.js (every scene's arrows
            give the textbook products), rings.js (the ring rule: benzyne, pyridine, pyridazine, the shapes),
-           film.js (the film's shapes: no swing, no jump), names.js (the name search on the shipped index)
+           film.js (the film's shapes: no swing, no jump), names.js (the name search on the shipped index),
+           mechanisms.js (every mechanism step by step: each step a move, the carry-over into the next step
+           uncharged, every film playable backwards)
 web/       index.html, app.js (three.js viewer, the search box, the film of a move), edit.js (editing on the page),
            arrows.js (drawing curved arrows with the pointer), names.json.gz (the names, built by
            tools/build-names.mjs), vendor/ (three.js and openchemlib shipped with the page)
