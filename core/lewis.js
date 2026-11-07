@@ -136,20 +136,64 @@ export function enumerate(node) {
   if (!structures.length) throw new Error('no Lewis structure found');
   const holes = sumCeil - pool - 2 * S; // in electrons
 
-  // ring rule: no atom in a ring of seven or fewer atoms carries two pi parts (two double bonds, or a
-  // triple bond), because such an atom would be linear and a small ring cannot hold it. This removes
-  // the pyridine structures with C=N(+)=C in the ring. Checked against the geometry of the node, not
-  // the structure: resonance locks nothing in (item 11), so every contributor must fit the same ring.
+  // Ring rule (7 Nov 2026, replacing the rule that refused benzyne). A ring of seven or fewer atoms
+  // cannot straighten an atom, so a ring atom keeps one orbital above and below the ring and, if it
+  // has only two neighbours, one orbital in the plane of the ring pointing outward. A second pi part
+  // at a ring atom has to use that in-plane orbital, and it can only bond with the in-plane orbital
+  // of a neighbour doing the same: two neighbouring ring atoms share one bond in the plane. That is
+  // benzyne's third bond. So (1) the ring atoms with two pi parts must pair off along bonds of order
+  // two or more between them; pyridine's C=N(+)=C has no partner for N and is refused, as before.
+  // (2) Electrons in the plane of the ring do not move between structures; only those above and
+  // below it do (the two sets of orbitals are at right angles). Each two-neighbour ring atom's
+  // in-plane orbital holds the in-plane bond, a lone pair, one electron or nothing, and every
+  // structure must agree with the one with the fewest charges. This refuses pyridazine's
+  // N(+)#N(+) form, which would empty both nitrogens' in-plane lone pairs into the ring above and
+  // below. Resonance locks nothing in (item 11): every contributor fits the same ring.
   const smallRing = smallRingAtoms(n, edges, bondable, 7);
   if (smallRing.size) {
-    const fits = s => {
+    const sigma = new Array(n).fill(0);
+    edges.forEach(([i, j], k) => { if (bondable[k]) { sigma[i]++; sigma[j]++; } });
+    const piAt = s => {
       const pi = new Array(n).fill(0);
       edges.forEach(([i, j], k) => { if (s.orders[k] > 1) { pi[i] += s.orders[k] - 1; pi[j] += s.orders[k] - 1; } });
-      for (const i of smallRing) if (pi[i] >= 2) return false;
-      return true;
+      return pi;
     };
-    structures = structures.filter(fits);
+    const paired = s => {
+      const pi = piAt(s);
+      const two = [...smallRing].filter(i => pi[i] >= 2);
+      if (two.some(i => pi[i] > 2)) return false;
+      const partners = new Map(two.map(i => [i, []]));
+      edges.forEach(([i, j], k) => {
+        if (s.orders[k] >= 2 && partners.has(i) && partners.has(j)) { partners.get(i).push(j); partners.get(j).push(i); }
+      });
+      const used = new Set();
+      const match = q => {
+        while (q < two.length && used.has(two[q])) q++;
+        if (q === two.length) return true;
+        const i = two[q];
+        used.add(i);
+        for (const j of partners.get(i)) {
+          if (used.has(j)) continue;
+          used.add(j);
+          if (match(q + 1)) return true;
+          used.delete(j);
+        }
+        used.delete(i);
+        return false;
+      };
+      return match(0);
+    };
+    structures = structures.filter(paired);
     if (!structures.length) throw new Error('no Lewis structure fits the ring');
+    const inPlane = s => {
+      const pi = piAt(s);
+      return [...smallRing].filter(i => free(i) && sigma[i] === 2)
+        .map(i => (pi[i] >= 2 ? 'b' : s.lone[i] >= 2 ? 'p' : s.lone[i] === 1 ? 'r' : 'e')).join('');
+    };
+    const charges = s => s.charge.reduce((t, q, i) => t + (free(i) ? Math.abs(q) : 0), 0);
+    const reference = structures.reduce((best, s) => (charges(s) < charges(best) ? s : best));
+    const want = inPlane(reference);
+    structures = structures.filter(s => inPlane(s) === want);
   }
 
   // third rule (his, 5 Nov 2026): no formal charge beyond +1 or -1 unless every structure has one

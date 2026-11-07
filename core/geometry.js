@@ -137,6 +137,14 @@ function ringThroughAngle(groups, a, i, b) {
   return null;
 }
 
+// A two-group atom whose two neighbours close a ring of at most seven atoms through it.
+function inSmallRing(groups, i) {
+  const g = groups[i];
+  if (g.groups !== 2 || g.nbrs.length !== 2) return false;
+  const ring = ringThroughAngle(groups, g.nbrs[0].j, i, g.nbrs[1].j);
+  return !!ring && ring.size <= 7;
+}
+
 // Decide which template slot each neighbour and lone pair takes.
 function assignSlots(g) {
   const T = TEMPLATES[g.groups];
@@ -324,6 +332,13 @@ function ringAngle(groups, i, a, b, template) {
 function atomTemplate(groups, i) {
   const g = groups[i];
   const plain = { T: TEMPLATES[g.groups], slots: assignSlots(g) };
+  const flat = ang => [Math.cos(ang), Math.sin(ang), 0];
+  if (inSmallRing(groups, i)) {
+    // a linear atom held bent by a small ring (benzyne): its two bonds at the ring's angle
+    const [a, b] = g.nbrs.map(x => x.j);
+    const ang = ringAngle(groups, i, a, b, Math.PI);
+    if (ang !== null) return { T: [flat(0), flat(ang)], slots: [a, b] };
+  }
   if (g.groups !== 3) return plain;
   const nb = g.nbrs.map(x => x.j);
   const ringPairs = [];
@@ -331,7 +346,6 @@ function atomTemplate(groups, i) {
     const ang = ringAngle(groups, i, nb[x], nb[y], 2 * Math.PI / 3);
     if (ang !== null) ringPairs.push({ a: nb[x], b: nb[y], ang });
   }
-  const flat = ang => [Math.cos(ang), Math.sin(ang), 0];
   if (ringPairs.length === 1) {
     const { a, b, ang } = ringPairs[0];
     const third = nb.find(j => j !== a && j !== b);
@@ -364,7 +378,9 @@ function angleTargets(groups, i, T, slots) {
     if (a === null || b === null || a === 'lp' || b === 'lp') continue;
     pairs.push({ a, b, theta0: Math.acos(Math.max(-1, Math.min(1, dot(T[s], T[t])))) });
   }
-  if (g.groups === 4) {
+  // a linear atom in a small ring (benzyne's triple-bond carbons) takes the ring's angle too: the
+  // ring cannot straighten it (the Lewis ring rule, core/lewis.js)
+  if (g.groups === 4 || g.groups === 2) {
     for (const p of pairs) {
       const ring = ringAngle(groups, i, p.a, p.b, p.theta0);
       if (ring !== null) p.theta0 = ring;
@@ -431,9 +447,12 @@ function springTerms(node, result, groups) {
 
   // flatness across bonds between two flat (three-group) centres: strong for double or partial-double
   // bonds, weak for a single bond joining two flat centres (conjugation, butadiene's middle bond)
+  // A two-group atom in a small ring counts as flat here: its two pi parts are one above and below
+  // the ring and one in its plane, so it keeps its neighbours in one plane (benzyne).
   const flats = []; // {a, i, j, b, k}: dihedral a-i-j-b, flat means sin = 0
+  const flatLike = i => groups[i].groups === 3 || inSmallRing(groups, i);
   bonds.forEach(({ i, j, order }) => {
-    if (groups[i].groups !== 3 || groups[j].groups !== 3) return;
+    if (!flatLike(i) || !flatLike(j)) return;
     const k = kf * (order > 1.05 ? 1 : 0.3);
     for (const na of groups[i].nbrs) for (const nb of groups[j].nbrs) {
       if (na.j === j || nb.j === i) continue;
@@ -442,10 +461,11 @@ function springTerms(node, result, groups) {
   });
 
   // at a linear atom with two multiple bonds (allene, ketene) the planes of its two neighbours are at
-  // right angles, because the two pi parts are
+  // right angles, because the two pi parts are; not in a small ring, where one pi part lies in the
+  // ring's plane and the other above and below it
   const twists = []; // {a, i, j, b, k}: dihedral a-i-j-b about the i...j axis, right angle means cos = 0
   groups.forEach((g, y) => {
-    if (g.groups !== 2 || g.nbrs.length !== 2) return;
+    if (g.groups !== 2 || g.nbrs.length !== 2 || inSmallRing(groups, y)) return;
     const [x, z] = g.nbrs.map(nb => nb.j);
     const ox = g.nbrs[0].order, oz = g.nbrs[1].order;
     if (ox <= 1.05 || oz <= 1.05) return;

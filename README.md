@@ -21,7 +21,7 @@ test/      node test/run.js (known answers), families.js, pi.js, compounds.js (t
            (reading and writing SMILES), edit.js (editing operations), rdkit-agreed.js (138 recorded answers;
            rdkit-dump.js and rdkit-compare.py made them), rules-lab.js (candidate rules, prints only),
            moves.js (arrows on the basic mechanisms, refusals, hybrids), reactions.js (every scene's arrows
-           give the textbook products)
+           give the textbook products), rings.js (the ring rule: benzyne, pyridine, pyridazine, the shapes)
 web/       index.html, app.js (three.js viewer, the film of a move), edit.js (editing on the page), arrows.js
            (drawing curved arrows with the pointer), vendor/ (three.js and openchemlib shipped with the page)
 build.sh   assembles dist/ (web + core) for publishing
