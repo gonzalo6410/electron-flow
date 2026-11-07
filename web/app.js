@@ -20,7 +20,9 @@ import { makeIndex, search, namesFor, reasonText, balanceSmiles } from './core/n
 const DWELL = 3000;   // ms a structure stays before the next equivalent one (4 s until 7 Nov 2026, his call: a bit faster)
 const FADE = 1200;    // ms for the old picture to go and the new one to come, one after the other
 const MOVE = 800;     // ms for the camera to travel to a newly loaded molecule
-const MOVIE = 3200;   // ms for a move to play from the reagents to the products
+const LINEUP = 1500;  // ms for the molecules to come together and line up before the film (items 69, 76)
+const FILM = 5500;    // ms for the film itself, from the reagents to the products (item 76)
+const MOVIE = LINEUP + FILM;
 
 // ---------- sizes, all in angstrom ----------
 const LINE = 0.055;       // radius of every bond line, single or one of a double
@@ -1344,7 +1346,7 @@ function makeMove(list) {
 // step; at the end the products are loaded as the molecule on screen.
 function playMove(out) {
   const film = filmSteps(current.node, out, current.geo, 21);
-  const { node, steps, roles, endPos } = film;
+  const { node, steps, roles, endPos, lineup } = film;
   arrows.clear();
   finishFade();
   const products = pieceFormulas(out.spec, out.after);
@@ -1358,7 +1360,7 @@ function playMove(out) {
   const { main, families } = mainAndFamilies(out.after, out.rAfter);
   const first = lift(shownStructure(), current.r.edges);
   const last = lift(out.rAfter.structures[showResonance ? families[0][0] : main], out.rAfter.edges);
-  movie = { node, steps, roles, first, last, start: performance.now(), out, products, shown: null, endPos, pausedAt: null };
+  movie = { node, steps, roles, lineup, first, last, start: performance.now(), out, products, shown: null, endPos, pausedAt: null };
   // the camera draws back at the start, if it must, so that nothing leaves the picture during the film
   const every = { atoms: steps.flatMap(() => node.atoms) };
   const everyGeo = { pos: steps.flatMap(st => st.geo.pos) };
@@ -1373,20 +1375,22 @@ function movieMix() { return movie && movie.shown ? movie.mix : 0; }
 function stepMovie(t) {
   if (movie.pausedAt !== null) return;
   const f = Math.min(1, (t - movie.start) / MOVIE);
-  const last = movie.steps.length - 1;
-  // a fifth of the time for the approach, then the blend, then the products settling, each eased
+  const last = movie.steps.length - 1, L = movie.lineup;
+  // the lineup first (the molecules come together, each turning and sliding as a whole), then the
+  // film: the blend, then the products settling, each eased
   const ease = v => v * v * (3 - 2 * v);
-  const x = f < 0.2 ? ease(f / 0.2) : f < 0.85 ? 1 + ease((f - 0.2) / 0.65) * (last - 2) : (last - 1) + ease((f - 0.85) / 0.15);
+  const fl = LINEUP / MOVIE, h = (f - fl) / (1 - fl);
+  const x = f < fl ? ease(f / fl) * L : h < 0.85 ? L + ease(h / 0.85) * (last - 1 - L) : (last - 1) + ease((h - 0.85) / 0.15);
   const k = Math.min(last - 1, Math.floor(x));
   const u = x - k;
   const a = movie.steps[k], b = movie.steps[k + 1];
   const pos = a.geo.pos.map((p, i) => p.map((v, q) => v + (b.geo.pos[i][q] - v) * u));
   const mix = a.mix + (b.mix - a.mix) * u;
   // the drawing: from the picture on screen to the average of the reagents' structures during the
-  // approach, then the weights blend from before to after, then from that average to the picture the
+  // lineup, then the weights blend from before to after, then from that average to the picture the
   // products will show during the settle
   const A = movie.steps[0].r.avg, B = movie.steps[last].r.avg;
-  const [P, Q, w] = f < 0.2 ? [movie.first, A, ease(f / 0.2)] : f < 0.85 ? [A, B, mix] : [B, movie.last, ease((f - 0.85) / 0.15)];
+  const [P, Q, w] = f < fl ? [movie.first, A, ease(f / fl)] : h < 0.85 ? [A, B, mix] : [B, movie.last, ease((h - 0.85) / 0.15)];
   const blend = key => P[key].map((v, i) => v + (Q[key][i] - v) * w);
   const orders = blend('orders'), lone = blend('lone');
   // the electrons an atom counts, from the pairs and bonds drawn (a leaving bromide counts its eight

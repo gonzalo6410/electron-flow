@@ -1,7 +1,9 @@
 // Electron Flow. Copyright (c) 2026 Gonzalo Fernandez de la Mora. All rights reserved (see LICENSE).
 // node test/film.js   the shapes of the film of every reaction scene (core/moves.js, filmSteps): the
 // substrate does not swing about (the first round of the moves review saw chloromethane turn about 90
-// degrees at the start), no atom jumps between two steps, and the SN2 film keeps O, C and Cl on a line.
+// degrees at the start), no atom jumps between two steps, the SN2 film keeps O, C and Cl on a line,
+// and in the lineup before the film every other molecule keeps its own shape and passes no atom of
+// another molecule closer than it will be in the approach.
 import { nodeFromSmiles } from '../core/smiles.js';
 import { buildNode, enumerate } from '../core/lewis.js';
 import { relax } from '../core/geometry.js';
@@ -37,19 +39,22 @@ for (const rx of REACTIONS) {
   let out = null;
   for (const st of [...r.structures].sort((a, b) => spread(a) - spread(b))) { out = commit(node, st, arrows, r); if (out.kind === 'move') break; }
   const geo = relax(node, r);
-  const { node: fnode, steps } = filmSteps(node, out, geo, 21);
+  const { node: fnode, steps, lineup } = filmSteps(node, out, geo, 21);
   const heavy = biggestPiece(node).filter(i => node.atoms[i].el !== 'H' && !node.fixed[i]);
   // printed, not judged: a molecule may have to change its own shape (butadiene turning s-cis,
   // acetaldehyde's C=O coming into line with the forming enolate)
-  const approachTurn = heavy.length >= 2 ? turnOf(heavy, steps[0].geo.pos, steps[2].geo.pos) : 0;
+  const approachTurn = heavy.length >= 2 ? turnOf(heavy, steps[0].geo.pos, steps[lineup + 1].geo.pos) : 0;
   // the biggest jump of an atom between two steps of the blend (the settle at the end is left out:
   // a loose ion may drift a long way to its new partner there)
-  let jump = 0;
+  let jump = 0, jumpWhere = '';
   for (let q = 1; q < steps.length - 2; q++) {
-    steps[q].geo.pos.forEach((p, i) => { if (!fnode.fixed[i]) jump = Math.max(jump, len(sub(p, steps[q + 1].geo.pos[i]))); });
+    steps[q].geo.pos.forEach((p, i) => {
+      const x = len(sub(p, steps[q + 1].geo.pos[i]));
+      if (!fnode.fixed[i] && x > jump) { jump = x; jumpWhere = `${node.atoms[i].el}${i + 1} at step ${q} of ${steps.length - 1}, lineup ends at ${lineup}`; }
+    });
   }
   console.log(`     ${rx.name}: the heavy atoms of the biggest molecule turn ${approachTurn.toFixed(0)} degrees by the first blended frame`);
-  say(jump < 1.2, `   no atom moves more than ${jump.toFixed(2)} A between two of the 21 steps (under 1.2)`);
+  say(jump < 1.2, `   no atom moves more than ${jump.toFixed(2)} A between two steps of the lineup and the blend (under 1.2; ${jumpWhere})`);
   // the substrate stays where it was on screen: its heavy atoms that stay together drift little from
   // where they started (the enolate scene's acetaldehyde drifted 1.9 A and turned on screen before
   // each step was laid onto the one before; moves review, 7 Nov 2026)
@@ -57,13 +62,47 @@ for (const rx of REACTIONS) {
   let drift = 0;
   for (const st of steps) for (const i of core) drift = Math.max(drift, len(sub(st.geo.pos[i], steps[0].geo.pos[i])));
   say(drift < 1.0, `   the substrate's own heavy atoms drift at most ${drift.toFixed(2)} A from where they were (under 1.0; the benzyne ring opens its angles by itself)`);
+  // the lineup: no bond is ever shorter or longer than it is on screen and in the approach (by more
+  // than 0.1 A), a loose ion's tie by no more than 1.5 A (it may go round wide to clear), and no two atoms of different molecules come closer than the closer of where
+  // they start and where the approach puts them, less 0.2 A (moving atoms straight from start to end
+  // shrank a turning hydroxide and could pass one molecule through another)
+  {
+    const group = (() => {
+      const parent = node.atoms.map((_, i) => i);
+      const find = i => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+      node.edges.forEach(([i, j]) => { parent[find(i)] = find(j); });
+      return node.atoms.map((_, i) => find(i));
+    })();
+    const d = (P, i, j) => len(sub(P[i], P[j]));
+    const A = steps[0].geo.pos, Z = steps[lineup].geo.pos;
+    let stretch = 0, tieStretch = 0, worstBond = '', close = Infinity, closeWhere = '';
+    for (let q = 1; q <= lineup; q++) {
+      const P = steps[q].geo.pos;
+      node.edges.forEach(([i, j]) => {
+        const x = d(P, i, j), lo = Math.min(d(A, i, j), d(Z, i, j)), hi = Math.max(d(A, i, j), d(Z, i, j));
+        if (node.fixed[i] || node.fixed[j]) { tieStretch = Math.max(tieStretch, lo - x, x - hi); return; }
+        if (Math.max(lo - x, x - hi) > stretch) { stretch = Math.max(lo - x, x - hi); worstBond = `${node.atoms[i].el}${i + 1}-${node.atoms[j].el}${j + 1} ${lo.toFixed(2)}..${hi.toFixed(2)} got ${x.toFixed(2)} at ${q}${node.fixed[i] || node.fixed[j] ? ' tie' : ''}`; }
+      });
+      for (let i = 0; i < node.atoms.length; i++) for (let j = i + 1; j < node.atoms.length; j++) {
+        if (group[i] === group[j]) continue;
+        // a loose ion only has to keep 2.2 A clear (or as close as it is at either end)
+        const ion = node.fixed[i] || node.fixed[j];
+        const end = Math.min(d(A, i, j), d(Z, i, j));
+        const gap = ion ? d(P, i, j) - Math.min(2.2, end) + 0.2 : d(P, i, j) - end;
+        if (gap < close) { close = gap; closeWhere = `${node.atoms[i].el}${i + 1}-${node.atoms[j].el}${j + 1} ${d(P, i, j).toFixed(2)} A`; }
+      }
+    }
+    say(stretch < 0.1, `   lineup: bonds stay between their lengths at the two ends (outside by at most ${Math.max(0, stretch).toFixed(3)} A ${worstBond})`);
+    say(tieStretch < 1.5, `   lineup: loose ions stay near their partners (a tie at most ${Math.max(0, tieStretch).toFixed(2)} A beyond its lengths at the two ends; under 1.5)`);
+    say(close > -0.2, `   lineup: molecules pass no closer than start or approach, less 0.2 A (closest ${closeWhere}, ${close.toFixed(2)} A beyond)`);
+  }
   if (rx.name.startsWith('SN2')) {
     // the fault of the first round: chloromethane swung about 90 degrees to meet the hydroxide
     const ax = st => sub(st.geo.pos[3], st.geo.pos[2]); // C is atom 2 and Cl atom 3 of '[OH-].[Na+].CCl'
     const turns = steps.slice(1, -1).map(st => angle([ax(steps[0]), [0, 0, 0], ax(st)], 0, 1, 2));
     say(Math.max(...turns) < 30, `   the C-Cl axis turns at most ${Math.max(...turns).toFixed(1)} degrees through the film, gradually (under 30; the first round saw about 90 in a few frames)`);
     const [O, C, Cl] = arrows.flatMap(a => ('pair' in a.from ? [a.from.pair] : [])).concat(arrows[1].from.bond);
-    const angs = steps.slice(1, -1).map(st => angle(st.geo.pos, O, C, Cl));
+    const angs = steps.slice(lineup, -1).map(st => angle(st.geo.pos, O, C, Cl));
     say(Math.min(...angs) > 170, `   O-C-Cl stays on a line through the blend: least ${Math.min(...angs).toFixed(1)} degrees`);
   }
 }

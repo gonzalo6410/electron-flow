@@ -33,7 +33,7 @@
 import { element } from './elements.js';
 import { buildNode, enumerate, hybrid } from './lewis.js';
 import { relax } from './geometry.js';
-import { bestFit } from './vectors.js';
+import { bestFit, rotate, sub, add, scale, dot, cross, len, norm, anyPerp } from './vectors.js';
 
 const key = (i, j) => `${Math.min(i, j)}-${Math.max(i, j)}`;
 
@@ -389,9 +389,12 @@ export function filmSteps(before, out, startGeo, count = 21) {
     const move = bestFit(core.map(i => geo.pos[i]), core.map(i => pos[i]), weights);
     return { ...geo, pos: geo.pos.map(move) };
   };
-  const approach = still(relax(node, shapeOrders(r0, o => (o > 0.5 ? 0.97 : 0.03)), { start: pos, anchor: { atoms: biggestPiece(before), k: 1 } }));
+  const approachShape = shapeOrders(r0, o => (o > 0.5 ? 0.97 : 0.03));
+  const approach = still(relax(node, approachShape, { start: pos, anchor: { atoms: biggestPiece(before), k: 1 } }));
   pos = approach.pos;
-  const steps = [{ mix: 0, r: r0, geo: startGeo }, { mix: 0, r: r0, geo: approach }];
+  // the lineup, before the film proper: from the picture on screen to the approach (lineupFrames)
+  const lineup = lineupFrames(before, startGeo.pos, approach.pos, core, LINEUP_FRAMES).map(p => ({ ...approach, pos: p }));
+  const steps = [{ mix: 0, r: r0, geo: startGeo }, ...lineup.map(geo => ({ mix: 0, r: r0, geo }))];
   // each frame is also held softly near the one before (a spring of 1 on every atom), so that a
   // loose part (a proton between two oxygens, a leaving ion) moves a little each frame instead of
   // jumping a whole angstrom in one; the products' own shape comes in the settle at the end
@@ -403,7 +406,207 @@ export function filmSteps(before, out, startGeo, count = 21) {
   }
   const settled = still(relax(out.after, out.rAfter, { start: pos }));
   steps.push({ mix: 1, r: frames[frames.length - 1].r, geo: settled });
-  return { node, steps, roles, endPos: settled.pos };
+  return { node, steps, roles, endPos: settled.pos, lineup: LINEUP_FRAMES };
+}
+
+// The lineup (items 69 and 76): before the film proper the molecules come together and line up for
+// the move, each as a whole, turning and sliding without changing its shape. The substrate (the
+// molecule holding the film's core) stays where it is; every other molecule swings round the
+// substrate's centre, turning with the swing as the moon turns with its orbit (a hydroxide keeps
+// facing the carbon it is heading for), turning on itself for whatever the swing leaves, its distance
+// from the centre changing evenly. Whatever a molecule changes in its own shape on the way (an O-H
+// turning towards the base, butadiene turning s-cis) is done atom by atom along its bonds, each atom
+// turning about the one before it, so no bond shortens. A loose ion goes round the atom it is tied
+// to, turning with that atom's molecule, by the shorter way round unless the longer one, or a wider
+// one, keeps it clear of the other atoms (a bromide must not pass through the water coming in). Where a swing
+// brings two molecules closer than they are at either end, it goes wider in the middle, by as little
+// as clears them. Moving each atom straight from start to end instead shrinks a molecule that turns
+// (at the middle of a half turn its bonds are a third short) and can take one molecule through
+// another. Returns LINEUP_FRAMES frames of positions, the last one the approach itself.
+const LINEUP_FRAMES = 24;
+const ION_CLEAR = 2.2;
+// The pieces the lineup moves: molecules by their bonds; a loose ion tied to an atom that is not loose
+// goes round that atom (partnerOf); loose ions tied only to each other (a sodium and its chloride)
+// move together as one piece.
+function lineupPieces(before) {
+  const n = before.atoms.length;
+  const loose = before.atoms.map((_, i) => !!before.fixed[i]);
+  const parent = before.atoms.map((_, i) => i);
+  const find = i => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+  const join = (i, j) => { parent[find(i)] = find(j); };
+  const nbr = Array.from({ length: n }, () => []);
+  before.edges.forEach(([i, j]) => { if (!loose[i] && !loose[j]) { join(i, j); nbr[i].push(j); nbr[j].push(i); } });
+  const partnerOf = new Array(n).fill(-1);
+  before.edges.forEach(([i, j]) => {
+    if (loose[i] && !loose[j] && partnerOf[i] < 0) partnerOf[i] = j;
+    if (loose[j] && !loose[i] && partnerOf[j] < 0) partnerOf[j] = i;
+  });
+  before.edges.forEach(([i, j]) => { if (loose[i] && loose[j] && partnerOf[i] < 0 && partnerOf[j] < 0) join(i, j); });
+  const groups = new Map();
+  for (let i = 0; i < n; i++) {
+    if (partnerOf[i] >= 0) continue;
+    const g = find(i);
+    if (!groups.has(g)) groups.set(g, []);
+    groups.get(g).push(i);
+  }
+  return { n, nbr, partnerOf, find, list: [...groups.values()] };
+}
+
+function lineupFrames(before, from, to, core, count) {
+  const { n, nbr, partnerOf, find, list } = lineupPieces(before);
+  const inCore = new Set(core);
+  const coreCount = g => g.filter(i => inCore.has(i)).length;
+  const held = core.length ? list.reduce((a, b) => (coreCount(b) > coreCount(a) ? b : a)) : null;
+  const centre = (atoms, P) => scale(atoms.reduce((t, i) => add(t, P[i]), [0, 0, 0]), 1 / atoms.length);
+  const pivot = held ? centre(held, from) : null;
+  const lerp = (a, b, u) => add(a, scale(sub(b, a), u));
+  // a turn from one direction and length to another, by the shorter way round or the longer (way -1)
+  const arcOf = (d0, d1, way = 1) => {
+    const r0 = len(d0), r1 = len(d1);
+    if (r0 < 1e-6 || r1 < 1e-6) return null;
+    const u0 = scale(d0, 1 / r0), u1 = scale(d1, 1 / r1);
+    const phi = Math.acos(Math.max(-1, Math.min(1, dot(u0, u1))));
+    const c = cross(u0, u1);
+    return { u0, r0, r1, phi: way > 0 ? phi : phi - 2 * Math.PI, axis: len(c) > 1e-6 ? norm(c) : anyPerp(u0) };
+  };
+  const along = (arc, u, wider = 0) => scale(rotate(arc.u0, arc.axis, arc.phi * u), arc.r0 + (arc.r1 - arc.r0) * u + 4 * u * (1 - u) * wider);
+  // the order in which a molecule's atoms are placed, each from the one before it along a bond
+  const treeOf = g => {
+    const inG = new Set(g), seen = new Set(), order = [];
+    for (const root of g) {
+      if (seen.has(root)) continue;
+      seen.add(root); order.push({ i: root, p: -1 });
+      for (let q = order.length - 1; q < order.length; q++) {
+        for (const j of nbr[order[q].i]) if (inG.has(j) && !seen.has(j)) { seen.add(j); order.push({ i: j, p: order[q].i }); }
+      }
+    }
+    return order;
+  };
+  // a molecule's own shape at u of the way from Y0 to Y1 (both in the same frame)
+  const shapeAt = (order, Y0, Y1, u) => {
+    const y = new Map();
+    for (const { i, p } of order) {
+      if (p < 0) { y.set(i, lerp(Y0[i], Y1[i], u)); continue; }
+      const arc = arcOf(sub(Y0[i], Y0[p]), sub(Y1[i], Y1[p]));
+      y.set(i, arc ? add(y.get(p), along(arc, u)) : lerp(Y0[i], Y1[i], u));
+    }
+    return y;
+  };
+  const motion = new Map(); // group -> { order, Y1, turnAt(u, v), place(u, wider) }
+  for (const g of list) {
+    const order = treeOf(g);
+    if (g === held) {
+      motion.set(g, { g, order, Y1: to, R: null, turnAt: (u, v) => v, centreAt: () => null });
+      continue;
+    }
+    const move = bestFit(g.map(i => from[i]), g.map(i => to[i]));
+    const R = matrixOf(move), Rt = transpose(R);
+    const c0 = centre(g, from), c1 = centre(g, to);
+    const Y1 = [];
+    for (const i of g) Y1[i] = add(c0, Rt.map(row => dot(row, sub(to[i], c1))));
+    const swing = pivot ? arcOf(sub(c0, pivot), sub(c1, pivot)) : null;
+    const turn = axisAngle(R);
+    let turnAt, centreAt;
+    if (swing && swing.r0 > 0.3 && swing.r1 > 0.3) {
+      const self = axisAngle(times(R, transpose(rotation(swing.axis, swing.phi))));
+      turnAt = (u, v) => rotate(rotate(v, swing.axis, swing.phi * u), self.axis, self.angle * u);
+      centreAt = (u, wider) => add(pivot, along(swing, u, wider));
+    } else {
+      turnAt = (u, v) => rotate(v, turn.axis, turn.angle * u);
+      centreAt = u => lerp(c0, c1, u);
+    }
+    motion.set(g, { g, order, Y1, R, c0, turnAt, centreAt, swings: !!(swing && swing.r0 > 0.3 && swing.r1 > 0.3) });
+  }
+  const groupOfAtom = new Map();
+  for (const g of list) for (const i of g) groupOfAtom.set(i, g);
+  const placeGroups = (u, wider) => {
+    const pos = from.map(p => [...p]);
+    for (const m of motion.values()) {
+      const y = shapeAt(m.order, from, m.Y1, u);
+      if (m.g === held) { for (const i of m.g) pos[i] = y.get(i); continue; }
+      const c = m.centreAt(u, wider);
+      for (const i of m.g) pos[i] = add(c, m.turnAt(u, sub(y.get(i), m.c0)));
+    }
+    return pos;
+  };
+  // the loose ions, each about its partner in the frame of the partner's molecule
+  const ions = [];
+  for (let i = 0; i < n; i++) {
+    const j = partnerOf[i];
+    if (j < 0) continue;
+    const m = motion.get(groupOfAtom.get(j));
+    const o1 = m.R ? transpose(m.R).map(row => dot(row, sub(to[i], to[j]))) : sub(to[i], to[j]);
+    ions.push({ i, j, m, o0: sub(from[i], from[j]), o1 });
+  }
+  const placeIons = (pos, u, choice) => {
+    ions.forEach((ion, t) => {
+      const { way, wider } = choice[t];
+      const arc = arcOf(ion.o0, ion.o1, way);
+      const o = arc ? along(arc, u, wider) : lerp(ion.o0, ion.o1, u);
+      pos[ion.i] = add(pos[ion.j], ion.m.turnAt(u, o));
+    });
+    return pos;
+  };
+  // how much closer than at either end two atoms come on a path (in A): `pairs` between molecules
+  // for the swings, and each ion against every atom but its partner for the ion's way round
+  const gap = (i, j) => Math.min(len(sub(from[i], from[j])), len(sub(to[i], to[j])));
+  const pairs = [];
+  for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
+    if (partnerOf[i] < 0 && partnerOf[j] < 0 && find(i) !== find(j)) pairs.push([i, j, gap(i, j)]);
+  }
+  const intrusion = (frames, list) => Math.max(0, ...frames.flatMap(P => list.map(([i, j, d]) => d - len(sub(P[i], P[j])))));
+  // a loose ion only has to keep clear: 2.2 A from any atom but its partner, or as close as it is at
+  // either end if that is closer
+  const ionGap = (i, k) => Math.min(ION_CLEAR, gap(i, k));
+  const us = Array.from({ length: count - 1 }, (_, k) => (k + 1) / count);
+  let wider = 0;
+  let base = us.map(u => placeGroups(u, 0));
+  if ([...motion.values()].some(m => m.swings)) {
+    for (let w = 0.5; w <= 6 && intrusion(base, pairs) > 0.2; w += 0.5) { wider = w; base = us.map(u => placeGroups(u, w)); }
+  }
+  const choice = ions.map(() => ({ way: 1, wider: 0 }));
+  const options = [];
+  for (const w of [0, 0.5, 1, 1.5]) for (const way of [1, -1]) options.push({ way, wider: w });
+  ions.forEach((ion, t) => {
+    const against = [];
+    for (let k = 0; k < n; k++) if (k !== ion.i && k !== ion.j && (partnerOf[k] < 0 || ions.findIndex(x => x.i === k) < t)) against.push([ion.i, k, ionGap(ion.i, k)]);
+    let best = null, bestScore = Infinity;
+    for (const opt of options) {
+      choice[t] = opt;
+      const frames = us.map((u, q) => placeIons(base[q].map(p => [...p]), u, choice));
+      const score = intrusion(frames, against);
+      if (score <= 0.05) { best = opt; break; }
+      if (score < bestScore) { bestScore = score; best = opt; }
+    }
+    choice[t] = best;
+  });
+  const frames = us.map((u, q) => placeIons(base[q], u, choice));
+  frames.push(to.map(p => [...p]));
+  return frames;
+}
+
+// turns as 3 by 3 matrices: the matrix of a rigid move (from bestFit), a turn about an axis, the
+// product of two, the reverse of one, and the axis and angle of one
+function matrixOf(move) {
+  const o = move([0, 0, 0]);
+  const col = [[1, 0, 0], [0, 1, 0], [0, 0, 1]].map(e => sub(move(e), o));
+  return [0, 1, 2].map(a => [0, 1, 2].map(b => col[b][a]));
+}
+function rotation(axis, angle) {
+  const col = [[1, 0, 0], [0, 1, 0], [0, 0, 1]].map(e => rotate(e, axis, angle));
+  return [0, 1, 2].map(a => [0, 1, 2].map(b => col[b][a]));
+}
+function times(A, B) { return A.map(row => [0, 1, 2].map(b => row[0] * B[0][b] + row[1] * B[1][b] + row[2] * B[2][b])); }
+function transpose(A) { return [0, 1, 2].map(a => [0, 1, 2].map(b => A[b][a])); }
+function axisAngle(R) {
+  const angle = Math.acos(Math.max(-1, Math.min(1, (R[0][0] + R[1][1] + R[2][2] - 1) / 2)));
+  if (angle < 1e-6) return { axis: [1, 0, 0], angle: 0 };
+  const axis = [R[2][1] - R[1][2], R[0][2] - R[2][0], R[1][0] - R[0][1]];
+  if (len(axis) > 1e-6) return { axis: norm(axis), angle };
+  // a half turn: the axis from the diagonal
+  const k = [0, 1, 2].reduce((m, i) => (R[i][i] > R[m][m] ? i : m), 0);
+  const nk = Math.sqrt(Math.max(1e-12, (R[k][k] + 1) / 2));
+  return { axis: norm([0, 1, 2].map(i => (i === k ? nk : (R[i][k] + R[k][i]) / (4 * nk)))), angle };
 }
 
 // the molecules of a node, each as a list of its atoms, by its bonds (a loose ion is a molecule of

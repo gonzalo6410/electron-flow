@@ -18,7 +18,7 @@ core/      chemistry, no dependence on any renderer
   names.js      the name search: comparing names, searching the index, counter-ions for a bare ion, the
                 skeleton key that names what is on screen
   moves.js      curved arrows applied to a structure: resonance, a move to a new node, or a refusal with the
-                reason; the node after a move; the transition hybrid at a run of mixes; the shapes of the film
+                reason; the node after a move; the transition hybrid at a run of mixes; the lineup before the film and the shapes of the film
   reactions.js  reaction scenes (reagents placed together) with their textbook arrows, and piece formulas
 test/      node test/run.js (known answers), families.js, pi.js, compounds.js (timings), geometry.js, extra.js,
            gradient.js (exact forces against finite differences), shapes.js (known-answer shapes), smiles.js
