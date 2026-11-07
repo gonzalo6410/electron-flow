@@ -1,7 +1,7 @@
 """Drive the moves on the Electron Flow page: python3 -I drive-moves.py SCRIPT OUT_PREFIX
 Steps (semicolon separated):
   pick:TEXT          choose the picker entry whose name starts with TEXT
-  smiles:TEXT        type a SMILES and press enter
+  smiles:TEXT        type a name or a SMILES and press enter
   show               click "show the arrows"
   go                 press Enter (make the move)
   button:ID          click a button by id
@@ -56,10 +56,10 @@ async def main():
                 await pg.evaluate("""(t) => { const sel = document.getElementById('case'); const o = [...sel.options].find(o => o.textContent.startsWith(t)); sel.value = o.value; sel.dispatchEvent(new Event('change')); }""", arg)
                 await pg.wait_for_timeout(1500)
             elif cmd == 'smiles':
-                await pg.fill('#smiles', arg); await pg.press('#smiles', 'Enter'); await pg.wait_for_timeout(1200)
+                await pg.fill('#search', arg); await pg.press('#search', 'Enter'); await pg.wait_for_timeout(1200)
             elif cmd == 'show': await pg.click('#show'); await pg.wait_for_timeout(400)
             elif cmd == 'addc':
-                await pg.evaluate("""(t) => { const s = document.getElementById('add'); const o = [...s.options].find(o => o.textContent === t); s.value = o.value; s.dispatchEvent(new Event('change')); }""", arg)
+                await pg.evaluate("""(t) => { const b = document.getElementById('search'); b.focus(); b.value = t; b.dispatchEvent(new Event('input')); b.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true, bubbles: true })); }""", arg)
                 await pg.wait_for_timeout(1500)
             elif cmd == 'go': await pg.keyboard.press('Enter'); await pg.wait_for_timeout(100)
             elif cmd == 'button': await pg.click('#' + arg); await pg.wait_for_timeout(400)

@@ -3,7 +3,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from './vendor/OrbitControls.js';
 import { CASES, runCase } from './core/cases.js';
-import { COMPOUNDS } from './core/compounds.js';
 import { nodeFromSmiles, toSmiles } from './core/smiles.js';
 import { buildNode, enumerate } from './core/lewis.js';
 import { relax } from './core/geometry.js';
@@ -12,11 +11,12 @@ import { structureFamilies } from './core/symmetry.js';
 import { ELEMENTS } from './core/elements.js';
 import { attachEditor } from './edit.js';
 import { attachArrows } from './arrows.js';
-import { commit, transitionFrames, combine } from './core/moves.js';
+import { commit, filmSteps, combine } from './core/moves.js';
 import { REACTIONS, resolveArrows, pieceFormulas } from './core/reactions.js';
+import { makeIndex, search, namesFor, reasonText, balanceSmiles } from './core/names.js';
 
 // ---------- timing ----------
-const DWELL = 4000;   // ms a structure stays before the next equivalent one
+const DWELL = 3000;   // ms a structure stays before the next equivalent one (4 s until 7 Nov 2026, his call: a bit faster)
 const FADE = 1200;    // ms for the old picture to go and the new one to come, one after the other
 const MOVE = 800;     // ms for the camera to travel to a newly loaded molecule
 const MOVIE = 3200;   // ms for a move to play from the reagents to the products
@@ -439,8 +439,10 @@ let editor = null;           // set up at the end, once the page exists
 let arrows = null;           // the curved arrows, set up at the end too
 let movie = null;            // a move playing: { node, steps, start, out, shown }
 
+let cutNote = '';             // after an edit: the bonds the octet left no room for
 function load(entry, animate) {
   movie = null;
+  cutNote = '';
   if (entry.kind === 'case') {
     const { node, r } = runCase(entry.c);
     show(null, node, r, null, animate);
@@ -583,6 +585,8 @@ function buildStructure() {
       m.userData.edge = k; m.userData.pick = true; m.userData.baseOpacity = 0;
       sub.add(m);
     });
+    const changing = movie && r.transitionEdges && r.transitionEdges[k] && !node.fixed[i] && !node.fixed[j];
+    if (o <= 1e-9 && changing) return; // a bond already broken, or not yet made: nothing to draw
     if (o <= 1e-9) {
       part(`edge:${k}:0`, sub => {
         if (node.fixed[i] || node.fixed[j]) {
@@ -621,14 +625,19 @@ function buildStructure() {
       }
       if (toward.dot(side) < 0) side.negate();
     }
+    // while a move plays, a bond being made or broken is as faint as it is weak, up to half a bond
+    const faint = changing && o < 0.5 ? Math.max(0.08, o / 0.5) : 1;
+    const mat = faint < 1 ? solid(0x3a3a3a) : bondMat;
+    if (faint < 1) mat.opacity = faint;
     part(`edge:${k}:${o.toFixed(3)}:${side.x.toFixed(2)},${side.y.toFixed(2)},${side.z.toFixed(2)}`, sub => {
       for (let q = 0; q < lines; q++) {
         const shift = side.clone().multiplyScalar(LINE_GAP * (q - (lines - 1) / 2));
         const pa = a2.clone().add(shift), pb = b2.clone().add(shift);
-        if (q === lines - 1 && fr > 1e-9) dashed(pa, pb, LINE * 0.8, bondMat, sub);
-        else sub.add(cylinder(pa, pb, LINE, bondMat));
+        if (q === lines - 1 && fr > 1e-9) dashed(pa, pb, LINE * 0.8, mat, sub);
+        else sub.add(cylinder(pa, pb, LINE, mat));
       }
-      tag(sub, k, `${pair}: ${orderWords(o)}`);
+      if (faint < 1) sub.traverse(m => { if (m.isMesh) m.userData.baseOpacity = faint; });
+      tag(sub, k, `${pair}: ${changing ? 'a bond being made or broken' : orderWords(o)}`);
     });
   });
 
@@ -657,10 +666,19 @@ function buildStructure() {
   });
 
   // charges
+  // While a move plays the charges are partial: a part of a charge shows as delta plus or delta
+  // minus, fainter the smaller it is, with no number on it (the hover note has the number); within a
+  // tenth of a whole charge it shows as the whole charge.
   sym.forEach((el, i) => {
-    if (Math.abs(st.charge[i]) < (movie ? 0.08 : 1e-9)) return;
-    part(`charge:${i}:${st.charge[i]}`, sub => {
-      const sp = chargeSprite(chargeMark(st.charge[i]));
+    const q = st.charge[i];
+    if (Math.abs(q) < (movie ? 0.08 : 1e-9)) return;
+    const near = Math.round(q);
+    const whole = !movie || (near !== 0 && Math.abs(q - near) < 0.1);
+    const text = whole ? chargeMark(movie ? near : q) : `δ${q < 0 ? MINUS : '+'}`;
+    const strength = whole ? 1 : 0.35 + 0.65 * Math.min(1, Math.abs(q) / 0.9);
+    part(`charge:${i}:${text}:${strength.toFixed(2)}`, sub => {
+      const sp = chargeSprite(text);
+      sp.material.opacity = strength; sp.userData.baseOpacity = strength;
       sub.add(sp);
       tracked.push({ sprite: sp, index: i, kind: 'charge', angle: null, goal: null, group: g });
     });
@@ -887,8 +905,9 @@ function atomNote(i) {
   if (node.fixed[i]) return `<b>${el}</b> ${charge}<br>a loose ion, no bonds${lone ? `, ${lone} lone electrons` : ''}`;
   const ceiling = ELEMENTS[el].ceiling;
   const count = st.count[i];
-  const octet = count >= ceiling ? `counts ${count} electrons, full` : `counts ${count} electrons, ${ceiling - count} short`;
-  const lones = lone === 0 ? 'no lone electrons' : lone === 1 ? '1 lone electron' : `${lone} lone electrons`;
+  const num = v => (Math.abs(v - Math.round(v)) < 1e-9 ? String(Math.round(v)) : v.toFixed(2));   // partial during a move
+  const octet = count >= ceiling - 1e-9 ? `counts ${num(count)} electrons, full` : `counts ${num(count)} electrons, ${num(ceiling - count)} short`;
+  const lones = lone === 0 ? 'no lone electrons' : lone === 1 ? '1 lone electron' : `${num(lone)} lone electrons`;
   return `<b>${el}</b> ${charge}<br>${octet}, ${lones}`;
 }
 
@@ -910,44 +929,185 @@ function updateTip() {
 }
 
 // ---------- panel ----------
+// The reaction scenes (and the SN2 transition state) in a short list; compounds come from the search.
 const sel = document.getElementById('case');
 const ENTRIES = [
-  ...COMPOUNDS.map(c => ({ kind: 'smiles', name: c.name, smiles: c.smiles, group: 'compounds' })),
   ...REACTIONS.map(rx => ({ kind: 'reaction', name: rx.name, smiles: rx.smiles, rx, group: 'reactions' })),
   ...CASES.filter(c => c.before).map(c => ({ kind: 'case', name: c.name, c, group: 'transitions' })),
 ];
-for (const groupName of ['compounds', 'reactions', 'transitions']) {
-  const og = document.createElement('optgroup');
-  og.label = groupName;
-  ENTRIES.forEach((e, i) => { if (e.group !== groupName) return; const o = document.createElement('option'); o.value = i; o.textContent = e.name; og.appendChild(o); });
-  sel.appendChild(og);
+{
+  const o = document.createElement('option'); o.value = ''; o.textContent = 'reaction scenes…'; sel.appendChild(o);
+  for (const groupName of ['reactions', 'transitions']) {
+    const og = document.createElement('optgroup');
+    og.label = groupName;
+    ENTRIES.forEach((e, i) => { if (e.group !== groupName) return; const op = document.createElement('option'); op.value = i; op.textContent = e.name; og.appendChild(op); });
+    sel.appendChild(og);
+  }
 }
-const typedOption = document.createElement('option');
-typedOption.value = 'typed'; typedOption.hidden = true;
-sel.prepend(typedOption);
 const errBox = document.getElementById('error');
+const subBox = document.getElementById('sub');
 function tryLoad(entry, animate = true) {
-  try { load(entry, animate); errBox.textContent = ''; }
-  catch (e) { errBox.textContent = e.message; }
+  try { load(entry, animate); errBox.textContent = ''; return true; }
+  catch (e) { errBox.textContent = e.message; return false; }
 }
 sel.addEventListener('change', () => {
-  if (sel.value === 'typed') return;
+  if (sel.value === '') return;
   const entry = ENTRIES[Number(sel.value)];
-  tryLoad(entry);
-  smilesBox.value = entry.smiles || '';
+  sel.value = ''; sel.blur();
+  if (tryLoad(entry)) { onScreen(entry.name); subBox.textContent = entry.kind === 'reaction' ? 'reagents placed together' : 'before and after at equal weight'; }
 });
-// a second picker that adds a compound to what is on screen, beside it, so a reagent can be brought in
-const addSel = document.getElementById('add');
-{
-  const o = document.createElement('option'); o.value = ''; o.textContent = 'add a compound to the scene…'; addSel.appendChild(o);
-  COMPOUNDS.forEach((c, i) => { const op = document.createElement('option'); op.value = i; op.textContent = c.name; addSel.appendChild(op); });
-}
-addSel.addEventListener('change', () => {
-  const pick = addSel.value; addSel.value = ''; addSel.blur();
-  if (pick === '' || !current || !current.spec || movie) return;
-  const entry = COMPOUNDS[Number(pick)];
+
+// ---------- the search: a name or a SMILES ----------
+// The names (web/names.json.gz, built by tools/build-names.mjs from PubChem's names) arrive after
+// the page; until then, and for anything not among them, the box reads SMILES.
+const searchBox = document.getElementById('search');
+const hitsBox = document.getElementById('hits');
+let names = null;            // the index, once loaded
+let namesNote = 'the names are still loading; a SMILES works now';
+let shownName = '';          // what the box says when it is not being typed in
+let hits = [], hitOn = -1;
+(async () => {
   try {
-    const other = nodeFromSmiles(entry.smiles);
+    const res = await fetch('./names.json.gz');
+    if (!res.ok) throw new Error(String(res.status));
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    let text;
+    if (bytes[0] === 0x1f && bytes[1] === 0x8b) {
+      const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+      text = await new Response(stream).text();
+    } else text = new TextDecoder().decode(bytes);   // the server already unpacked it
+    names = makeIndex(JSON.parse(text));
+    namesNote = '';
+    if (document.activeElement === searchBox) suggest();
+    if (current && !shownName) nameOnScreen();
+  } catch (e) {
+    namesNote = 'the names could not be loaded; a SMILES still works';
+  }
+})();
+
+// the box shows the name of what is on screen, or a grey line when it has none
+function onScreen(name, placeholder = 'a name or a SMILES') {
+  shownName = name || '';
+  searchBox.value = shownName;
+  searchBox.placeholder = placeholder;
+}
+// after an edit or a move: the name of the molecule now on screen if the list has it
+function nameOnScreen(fallback) {
+  const found = current && current.spec ? namesFor(names, current.spec) : null;
+  if (found) onScreen(found.join(' + '));
+  else onScreen('', fallback || 'a name or a SMILES');
+}
+
+function suggest() {
+  const text = searchBox.value.trim();
+  hits = names && text ? search(names, text, 8) : [];
+  hitOn = -1;
+  drawHits(text);
+}
+function drawHits(text) {
+  hitsBox.innerHTML = '';
+  if (!text) { hitsBox.classList.remove('open'); return; }
+  if (!hits.length) {
+    const d = document.createElement('div');
+    d.className = 'none';
+    d.textContent = namesNote || 'no name matches; enter reads it as a SMILES';
+    hitsBox.appendChild(d);
+  }
+  hits.forEach((h, q) => {
+    const row = document.createElement('div');
+    row.className = 'hit' + (q === hitOn ? ' on' : '') + (h.entry.smiles ? '' : ' off');
+    const nm = document.createElement('div');
+    nm.className = 'nm';
+    nm.textContent = h.entry.name;
+    if (h.matched !== h.entry.name || !h.entry.smiles) {
+      const why = document.createElement('span');
+      why.className = 'why';
+      why.textContent = h.entry.smiles ? `also called ${h.matched}` : `not shown: ${reasonText(h.entry.key)}`;
+      nm.appendChild(why);
+    }
+    row.appendChild(nm);
+    if (h.entry.smiles) {
+      const add = document.createElement('span');
+      add.className = 'add';
+      add.textContent = 'add';
+      add.title = 'add it beside what is on screen';
+      add.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); pickHit(q, true); });
+      row.appendChild(add);
+    }
+    row.addEventListener('mousedown', e => { e.preventDefault(); pickHit(q, false); });
+    hitsBox.appendChild(row);
+  });
+  hitsBox.classList.add('open');
+}
+function closeHits() { hits = []; hitOn = -1; hitsBox.classList.remove('open'); hitsBox.innerHTML = ''; }
+
+// load a compound, or add it beside what is on screen
+function loadCompound(name, smiles, beside) {
+  const balanced = balanceSmiles(smiles);
+  const ok = beside ? addBeside(balanced.smiles) : tryLoad({ kind: 'smiles', name, smiles: balanced.smiles });
+  if (!ok) return false;
+  if (beside) nameOnScreen('two compounds on screen');
+  else onScreen(name);
+  const added = balanced.added ? `, with ${balanced.added.count > 1 ? balanced.added.count + ' ' : ''}${balanced.added.ion} beside it to balance the charge` : '';
+  subBox.textContent = beside ? `${name} added beside${added}` : added ? added.slice(2) : '';
+  return true;
+}
+function pickHit(q, beside) {
+  const h = hits[q];
+  if (!h) return;
+  closeHits();
+  if (!h.entry.smiles) { errBox.textContent = `${h.entry.name} cannot be shown yet: ${reasonText(h.entry.key)}`; searchBox.select(); return; }
+  if (loadCompound(h.entry.name, h.entry.smiles, beside)) searchBox.blur();
+}
+// Enter: the highlighted suggestion; else a name equal to what was typed; else the text as a SMILES;
+// else the first suggestion
+function enter(beside) {
+  const text = searchBox.value.trim();
+  if (!text) return;
+  if (hitOn >= 0) { pickHit(hitOn, beside); return; }
+  if (names) {
+    const found = search(names, text, 8);
+    if (found.length && found[0].exact) { hits = found; pickHit(0, beside); return; }
+    hits = found;
+  }
+  let smilesOk = true;
+  try { nodeFromSmiles(text); } catch (e) { smilesOk = false; }
+  if (smilesOk) {
+    closeHits();
+    if (loadCompound(text, text, beside)) {
+      if (!beside) nameOnScreen('typed as a SMILES');
+      searchBox.blur();
+    } else searchBox.select();
+    return;
+  }
+  if (hits.length) { pickHit(0, beside); return; }
+  closeHits();
+  errBox.textContent = names ? `no compound called "${text}" in the list, and it does not read as a SMILES` : `"${text}" does not read as a SMILES, and ${namesNote}`;
+  searchBox.select();
+}
+searchBox.addEventListener('focus', () => { searchBox.select(); });
+searchBox.addEventListener('input', () => { errBox.textContent = ''; suggest(); });
+searchBox.addEventListener('keydown', e => {
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    if (!hits.length) return;
+    e.preventDefault();
+    hitOn = e.key === 'ArrowDown' ? Math.min(hits.length - 1, hitOn + 1) : Math.max(-1, hitOn - 1);
+    drawHits(searchBox.value.trim());
+  } else if (e.key === 'Escape') {
+    closeHits(); searchBox.value = shownName; searchBox.blur();
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    enter(e.shiftKey);
+  }
+});
+searchBox.addEventListener('blur', () => { closeHits(); if (!errBox.textContent) searchBox.value = shownName; });
+document.getElementById('search-form').addEventListener('submit', e => e.preventDefault());
+
+// a second compound beside what is on screen, so a reagent can be brought in
+function addBeside(smiles) {
+  if (!current || !current.spec || movie) { errBox.textContent = 'there is nothing to add it to; it is loaded on its own instead'; return tryLoad({ kind: 'smiles', name: smiles, smiles }); }
+  try {
+    const other = nodeFromSmiles(smiles);
     const c = combine(current.spec, other);
     // the newcomer starts to the right of everything as seen on screen, in its own relaxed shape,
     // level with the middle of what is there
@@ -963,23 +1123,11 @@ addSel.addEventListener('change', () => {
     loadSpec(c.spec, start);
     current.reaction = null;
     showHint();
-    typedOption.textContent = 'edited molecule'; typedOption.hidden = false; sel.value = 'typed';
-    smilesBox.value = toSmiles(current.node, current.r.structures[current.main]);
     errBox.textContent = '';
     moveCamera(frameFor(current.node, current.geo, null, { dir: camera.position.clone().sub(controls.target).normalize(), up: camera.up }), true);
-  } catch (err) { errBox.textContent = err.message; }
-});
-const smilesBox = document.getElementById('smiles');
-document.getElementById('smiles-form').addEventListener('submit', e => {
-  e.preventDefault();
-  const text = smilesBox.value.trim();
-  if (!text) return;
-  tryLoad({ kind: 'smiles', name: text, smiles: text });
-  typedOption.textContent = `typed: ${text}`;
-  typedOption.hidden = false;
-  sel.value = 'typed';
-  smilesBox.blur();
-});
+    return true;
+  } catch (err) { errBox.textContent = err.message; return false; }
+}
 
 const resonanceBox = document.getElementById('resonance');
 resonanceBox.addEventListener('change', () => {
@@ -1001,6 +1149,14 @@ function stepFamily(d) {
   showStructure(true);
 }
 function togglePause() {
+  if (movie) {
+    // space holds the film where it is, and lets it go on
+    const now = performance.now();
+    if (movie.pausedAt === null) movie.pausedAt = now;
+    else { movie.start += now - movie.pausedAt; movie.pausedAt = null; }
+    updatePanel();
+    return;
+  }
   paused = !paused;
   lastSwitch = performance.now();
   updatePanel();
@@ -1021,7 +1177,7 @@ window.addEventListener('keydown', e => {
 function updatePanel() {
   if (movie) {
     const made = movie.out.made.length, broken = movie.out.broken.length;
-    const lines = ['<b>the move</b> is playing', `${made} bond${made === 1 ? '' : 's'} made, ${broken} broken`, `products: ${movie.products.join(', ')}`];
+    const lines = [movie.pausedAt === null ? '<b>the move</b> is playing (space holds it)' : '<b>the move</b> is held (space goes on)', `${made} bond${made === 1 ? '' : 's'} made, ${broken} broken`, `products: ${movie.products.join(', ')}`];
     document.getElementById('status').innerHTML = lines.map(l => `<div>${l}</div>`).join('');
     document.getElementById('steps').style.visibility = 'hidden';
     return;
@@ -1080,12 +1236,20 @@ editor = attachEditor({
   isEditable: () => !current || !!current.spec,
   loadSpec: (spec, start) => {
     loadSpec(spec, start);
-    typedOption.textContent = 'edited molecule'; typedOption.hidden = false; sel.value = 'typed';
-    // the box shows the SMILES of what is on screen now, in its main structure, ready to copy
-    smilesBox.value = current ? toSmiles(current.node, current.r.structures[current.main]) : '';
+    // the box names what is on screen now, if the list has it
+    nameOnScreen(current ? 'edited molecule' : 'nothing on screen');
+    subBox.textContent = '';
     errBox.textContent = '';
+    // say so when the octet leaves no room for a bond the edit asked for (a fifth neighbour on C)
+    cutNote = '';
+    if (current && current.spec) {
+      const st = current.r.structures[current.main];
+      const cut = current.r.edges.filter(([i, j], k) => st.orders[k] === 0 && !current.node.fixed[i] && !current.node.fixed[j]);
+      const nm = i => `${current.node.atoms[i].el}${i}`;
+      if (cut.length) cutNote = `No room in the octet for ${cut.length === 1 ? 'the bond' : 'the bonds'} ${cut.map(([i, j]) => `${nm(i)}-${nm(j)}`).join(', ')}: drawn hashed, as no bond.`;
+    }
   },
-  setNote: text => { document.getElementById('note').textContent = text; },
+  setNote: text => { document.getElementById('note').textContent = cutNote ? `${cutNote} ${text}` : text; },
 });
 document.getElementById('fill').addEventListener('click', e => { editor.fill(); e.target.blur(); });
 
@@ -1151,29 +1315,16 @@ function makeMove(list) {
 // order and charge slides from its old value to its new one; the shape follows, relaxed step by
 // step; at the end the products are loaded as the molecule on screen.
 function playMove(out) {
-  const before = current.node;
-  const frames = transitionFrames(before, out.after, 21);
-  // during the film a leaving ion is still an ordinary atom whose pairs fill up as its bond goes
-  const node = { ...before, edges: out.hybrid.edges, fixed: before.fixed.map((f, i) => (before.els[i].ionic ? f : null)) };
-  let pos = current.geo.pos;
-  // first the reagents drift together (the bonds to be made pull a little, the bonds to be broken
-  // let go a little), then the weights blend
-  const r0 = frames[0].r;
-  const bondEdge = k => !before.els[r0.edges[k][0]].ionic && !before.els[r0.edges[k][1]].ionic;
-  const nudged = { ...r0, avg: { ...r0.avg, orders: r0.avg.orders.map((o, k) => (r0.transitionEdges[k] && bondEdge(k) ? (o > 0.5 ? 0.97 : 0.03) : o)) } };
-  const approach = relax(node, nudged, { start: pos });
-  pos = approach.pos;
-  const steps = [{ mix: 0, r: frames[0].r, geo: current.geo }, { mix: 0, r: frames[0].r, geo: approach },
-    ...frames.map(f => { const geo = relax(node, f.r, { start: pos }); pos = geo.pos; return { mix: f.mix, r: f.r, geo }; })];
-  // last, the products settle into their own shape (a leaving ion drifts off to its partner), so
-  // that loading them afterwards moves nothing
-  const settled = relax(out.after, out.rAfter, { start: pos });
-  steps.push({ mix: 1, r: frames[frames.length - 1].r, geo: { ...settled, pos: settled.pos } });
-  pos = settled.pos;
+  const film = filmSteps(current.node, out, current.geo, 21);
+  const { node, steps, endPos } = film;
   arrows.clear();
   finishFade();
   const products = pieceFormulas(out.spec, out.after);
-  movie = { node, steps, start: performance.now(), out, products, shown: null, endPos: pos };
+  movie = { node, steps, start: performance.now(), out, products, shown: null, endPos, pausedAt: null };
+  // the camera draws back at the start, if it must, so that nothing leaves the picture during the film
+  const every = { atoms: steps.flatMap(() => node.atoms) };
+  const everyGeo = { pos: steps.flatMap(st => st.geo.pos) };
+  if (outOfView(everyGeo)) moveCamera(frameFor(every, everyGeo, null, { dir: camera.position.clone().sub(controls.target).normalize(), up: camera.up }), true);
   current = { ...current, node, r: steps[0].r, geo: steps[0].geo };
   buildAtoms();
   stepMovie(performance.now());
@@ -1182,6 +1333,7 @@ function playMove(out) {
 }
 function movieMix() { return movie && movie.shown ? movie.mix : 0; }
 function stepMovie(t) {
+  if (movie.pausedAt !== null) return;
   const f = Math.min(1, (t - movie.start) / MOVIE);
   const last = movie.steps.length - 1;
   // a fifth of the time for the approach, then the blend, then the products settling, each eased
@@ -1206,8 +1358,8 @@ function stepMovie(t) {
     loadSpec(out.spec, endPos, true);
     // the products may have drawn together or come apart: fit the picture to them, gently
     moveCamera(frameFor(current.node, current.geo, null, { dir: camera.position.clone().sub(controls.target).normalize(), up: camera.up }), true);
-    typedOption.textContent = 'after the move'; typedOption.hidden = false; sel.value = 'typed';
-    smilesBox.value = toSmiles(current.node, current.r.structures[current.main]);
+    nameOnScreen('after the move');
+    subBox.textContent = `after the move: ${pieceFormulas(out.spec, out.after).join(', ')}`;
     errBox.textContent = '';
     current.reaction = null; showHint();
     const made = out.made.length, broken = out.broken.length;
@@ -1234,9 +1386,9 @@ for (const row of TABLE) for (const el of row) {
   tableBox.appendChild(b);
 }
 
-const first = ENTRIES.findIndex(e => e.name === 'SF6');
-sel.value = first;
-tryLoad(ENTRIES[first], false);
+// the page opens on SF6
+tryLoad({ kind: 'smiles', name: 'sulfur hexafluoride', smiles: 'FS(F)(F)(F)(F)F' }, false);
+onScreen('sulfur hexafluoride');
 requestAnimationFrame(animate);
 
 // a handle for scripted tests, so a script can find an atom on the screen and click it
@@ -1246,4 +1398,15 @@ window.electronFlow = {
   pairs: () => tracked.filter(t => t.kind === 'pair').map(t => ({ index: t.index, pos: t.sprite.position.toArray() })),
   arrows: () => (arrows ? arrows.arrows() : []),
   playing: () => !!movie,
+  smiles: () => (current && current.spec ? toSmiles(current.node, current.r.structures[current.main]) : ''),
+  // hold the film at a fraction of its length (0 to 1), for frame-by-frame checks; null lets it go on
+  holdFilm: f => {
+    if (!movie) return false;
+    const now = performance.now();
+    if (f === null) { if (movie.pausedAt !== null) { movie.start += now - movie.pausedAt; movie.pausedAt = null; } return true; }
+    movie.pausedAt = null; movie.start = now - f * MOVIE; stepMovie(now);
+    if (movie) movie.pausedAt = now;
+    return true;
+  },
+  namesReady: () => !!names,
 };

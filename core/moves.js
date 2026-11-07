@@ -31,6 +31,7 @@
 
 import { element } from './elements.js';
 import { buildNode, enumerate, hybrid } from './lewis.js';
+import { relax } from './geometry.js';
 
 const key = (i, j) => `${Math.min(i, j)}-${Math.max(i, j)}`;
 
@@ -313,4 +314,53 @@ export function describeArrow(node, a) {
   const tail = 'pair' in a.from ? `pair on ${atomName(node, a.from.pair)}` : `${atomName(node, a.from.bond[0])}-${atomName(node, a.from.bond[1])}`;
   const head = 'atom' in a.to ? atomName(node, a.to.atom) : `${atomName(node, a.to.bond[0])}-${atomName(node, a.to.bond[1])}`;
   return `${tail} to ${head}`;
+}
+
+// The shapes of the film of a move (item 15), from the geometry on screen: the reagents first drift
+// together (the bonds to be made pull a little, the bonds to be broken let go a little) while the
+// biggest molecule is held where it is, so the reagent comes round to the substrate rather than the
+// substrate swinging about to meet it; then the weights blend from all-before to all-after, the shape
+// relaxed at each of `count` mixes from the one before; last the products settle into their own
+// shape (a leaving ion drifts off to its partner), so that loading them afterwards moves nothing.
+// For the shape only, a bond being made or broken is held between 0.03 and 0.97 inside the blend: at
+// zero its two atoms would no longer be held on one line and the molecule would swing (the first and
+// last frames turned chloromethane 70 degrees; moves review, 6 Nov 2026). During the film a leaving
+// ion is an ordinary atom whose pairs fill up as its bond goes. Returns the film's node, the steps
+// ({ mix, r, geo }, the first being the geometry on screen) and the positions it ends on.
+export function filmSteps(before, out, startGeo, count = 21) {
+  const frames = transitionFrames(before, out.after, count);
+  const node = { ...before, edges: out.hybrid.edges, fixed: before.fixed.map((f, i) => (before.els[i].ionic ? f : null)) };
+  const r0 = frames[0].r;
+  const bondEdge = k => !before.els[r0.edges[k][0]].ionic && !before.els[r0.edges[k][1]].ionic;
+  const shapeOrders = (fr, f) => ({ ...fr, avg: { ...fr.avg, orders: fr.avg.orders.map((o, k) => (fr.transitionEdges[k] && bondEdge(k) ? f(o) : o)) } });
+  let pos = startGeo.pos;
+  const approach = relax(node, shapeOrders(r0, o => (o > 0.5 ? 0.97 : 0.03)), { start: pos, anchor: { atoms: biggestPiece(before), k: 1 } });
+  pos = approach.pos;
+  const steps = [{ mix: 0, r: r0, geo: startGeo }, { mix: 0, r: r0, geo: approach }];
+  // each frame is also held softly near the one before (a spring of 1 on every atom), so that a
+  // loose part (a proton between two oxygens, a leaving ion) moves a little each frame instead of
+  // jumping a whole angstrom in one; the products' own shape comes in the settle at the end
+  const all = node.atoms.map((_, i) => i);
+  for (const f of frames) {
+    const geo = relax(node, shapeOrders(f.r, o => Math.min(0.97, Math.max(o, 0.03))), { start: pos, anchor: { atoms: all, k: 1 } });
+    pos = geo.pos;
+    steps.push({ mix: f.mix, r: f.r, geo });
+  }
+  const settled = relax(out.after, out.rAfter, { start: pos });
+  steps.push({ mix: 1, r: frames[frames.length - 1].r, geo: settled });
+  return { node, steps, endPos: settled.pos };
+}
+
+// the atoms of the molecule with the most atoms (a loose ion counts with its partner); none when
+// there is only one molecule
+export function biggestPiece(node) {
+  const n = node.atoms.length;
+  const parent = node.atoms.map((_, i) => i);
+  const find = i => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+  node.edges.forEach(([i, j]) => { if (!node.fixed[i] && !node.fixed[j]) parent[find(i)] = find(j); });
+  const groups = new Map();
+  for (let i = 0; i < n; i++) { const r = find(i); if (!groups.has(r)) groups.set(r, []); groups.get(r).push(i); }
+  const all = [...groups.values()];
+  if (all.length < 2) return [];
+  return all.reduce((a, b) => (b.length > a.length ? b : a));
 }

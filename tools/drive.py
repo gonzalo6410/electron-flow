@@ -2,7 +2,7 @@
 
 Usage: python3 -I drive.py SCRIPT OUT_PREFIX
 SCRIPT is a semicolon-separated list of steps:
-  smiles:TEXT        type a SMILES and press enter
+  smiles:TEXT        type a name or a SMILES and press enter
   res:on|off         set the resonance switch
   wait:MS            wait
   shot:NAME          save OUT_PREFIX-NAME.png and print the status and note
@@ -47,7 +47,7 @@ async def main():
             if not step: continue
             cmd, _, arg = step.partition(':')
             if cmd == 'smiles':
-                await pg.fill('#smiles', arg); await pg.press('#smiles', 'Enter'); await pg.wait_for_timeout(1200)
+                await pg.fill('#search', arg); await pg.press('#search', 'Enter'); await pg.wait_for_timeout(1200)
             elif cmd == 'res':
                 checked = await pg.is_checked('#resonance')
                 if (arg == 'on') != checked: await pg.click('.switch')

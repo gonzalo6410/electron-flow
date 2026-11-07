@@ -647,7 +647,26 @@ export function relax(node, result, opts = {}) {
     const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff - 0.5; };
     pos = pos.map(p => [p[0] + 0.05 * rnd(), p[1] + 0.05 * rnd(), p[2] + 0.05 * rnd()]);
   }
-  const model = energyModel(node, result, groups);
+  let model = energyModel(node, result, groups);
+  // opts.anchor: { atoms, k } holds those atoms near where they start with a soft spring each, so
+  // that a molecule turning as a whole costs something (the film of a move: the substrate stays put
+  // and the reagent comes round to it) while its own bonds and angles still decide its shape
+  if (opts.anchor && opts.anchor.atoms.length) {
+    const inner = model;
+    const ka = opts.anchor.k ?? 1;
+    const at = opts.anchor.atoms;
+    const home = pos.map(p => [...p]);
+    const extra = (x, g) => {
+      let E = 0;
+      for (const i of at) for (let q = 0; q < 3; q++) {
+        const d = x[3 * i + q] - home[i][q];
+        E += ka * d * d;
+        if (g) g[3 * i + q] += 2 * ka * d;
+      }
+      return E;
+    };
+    model = { ...inner, energy: x => inner.energy(x) + extra(x, null), gradient: (x, g) => { const E = inner.gradient(x, g); return E + extra(x, g); } };
+  }
   const x = new Float64Array(pos.flat());
   const done = minimize(model, x, { maxIter: opts.iters ?? 500 });
   pos = pos.map((_, i) => [done.x[3 * i], done.x[3 * i + 1], done.x[3 * i + 2]]);

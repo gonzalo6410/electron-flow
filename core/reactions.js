@@ -73,6 +73,36 @@ export const REACTIONS = [
     products: ['C6H9O2-', 'Na+'],
   },
   {
+    // benzyne by elimination (7 Nov 2026): the amide takes the hydrogen next to the chlorine, that
+    // C-H pair becomes the bond in the ring's plane, and chloride leaves
+    name: 'benzyne step 1: amide takes the proton next to Cl, chloride leaves',
+    smiles: 'Clc1ccccc1.[NH2-].[Na+]',
+    arrows: [
+      { from: { pair: 'a7' }, to: { bond: ['a7', 'h2'] } },
+      { from: { bond: ['a2', 'h2'] }, to: { bond: ['a2', 'a1'] } },
+      { from: { bond: ['a1', 'a0'] }, to: { atom: 'a0' } },
+    ],
+    products: ['C6H4', 'H3N', 'Cl-', 'Na+'],
+  },
+  {
+    name: 'benzyne step 2: amide adds to benzyne',
+    smiles: 'C1=CC#CC=C1.[NH2-].[Na+]',
+    arrows: [
+      { from: { pair: 'a6' }, to: { bond: ['a6', 'a2'] } },
+      { from: { bond: ['a2', 'a3'] }, to: { atom: 'a3' } },
+    ],
+    products: ['C6H6N-', 'Na+'],
+  },
+  {
+    name: 'benzyne step 3: the ring carbon takes a proton from ammonia (aniline)',
+    smiles: 'Nc1[c-]cccc1.[Na+].N',
+    arrows: [
+      { from: { pair: 'a2' }, to: { bond: ['a2', 'h8'] } },
+      { from: { bond: ['a8', 'h8'] }, to: { atom: 'a8' } },
+    ],
+    products: ['C6H7N', 'H2N-', 'Na+'],
+  },
+  {
     name: 'Diels Alder: butadiene and ethylene',
     smiles: 'C=CC=C.C=C',
     arrows: [

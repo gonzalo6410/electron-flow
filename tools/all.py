@@ -1,4 +1,5 @@
-"""Screenshot every compound in the picker (resonance off, then on for a few) into contact sheets.
+"""Screenshot every compound of the test list (core/compounds.js, typed into the search box as SMILES) and every
+reaction scene into contact sheets.
 Usage: python3 -I all.py OUTDIR
 """
 import asyncio, sys, os, json
@@ -14,11 +15,17 @@ async def main():
         pg.on('console', lambda m: errs.append(f'{m.type}: {m.text}') if m.type == 'error' else None)
         pg.on('pageerror', lambda e: errs.append(f'pageerror: {e}'))
         await pg.goto('http://localhost:8765/index.html'); await pg.wait_for_timeout(2500)
-        names = await pg.evaluate("[...document.querySelectorAll('#case option')].filter(o => !o.hidden).map(o => [o.value, o.textContent])")
+        compounds = await pg.evaluate("import('./core/compounds.js').then(m => m.COMPOUNDS.map(c => [c.name, c.smiles]))")
+        scenes = await pg.evaluate("[...document.querySelectorAll('#case option')].filter(o => o.value !== '').map(o => [o.value, o.textContent])")
+        todo = [('c', name, smi) for name, smi in compounds] + [('s', name, value) for value, name in scenes]
         shots = []
-        for value, name in names:
-            await pg.select_option('#case', value); await pg.wait_for_timeout(1300)
-            path = f'{out}/{value}.png'
+        for q, (kind, name, what) in enumerate(todo):
+            if kind == 'c':
+                await pg.fill('#search', what); await pg.press('#search', 'Enter')
+            else:
+                await pg.select_option('#case', what)
+            await pg.wait_for_timeout(1300)
+            path = f'{out}/{q:03d}.png'
             await pg.locator('#view').screenshot(path=path)
             status = (await pg.inner_text('#status')).replace('\n', ' | ')
             shots.append((name, path, status))

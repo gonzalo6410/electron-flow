@@ -13,10 +13,26 @@
   canvas { display: block; }
   h1 { font-size: 15px; font-weight: 600; letter-spacing: 0.01em; margin: 0 0 14px 0; }
   select { width: 100%; font: inherit; font-size: 13px; color: var(--ink); background: #fff; border: 1px solid #ccc; border-radius: 4px; padding: 6px 8px; }
-  .smiles { margin-top: 8px; }
-  .smiles input { width: 100%; box-sizing: border-box; font: inherit; font-size: 13px; color: var(--ink); border: 1px solid #ccc; border-radius: 4px; padding: 6px 8px; }
-  .smiles input:focus { outline: none; border-color: var(--ink); }
-  #error { color: #a33; font-size: 12px; margin-top: 4px; }
+  .search { position: relative; }
+  .search input { width: 100%; box-sizing: border-box; font: inherit; font-size: 14px; color: var(--ink); border: 1px solid #ccc; border-radius: 4px; padding: 7px 9px; }
+  .search input:focus { outline: none; border-color: var(--ink); }
+  .search input::placeholder { color: #aaa; }
+  /* suggestions under the box while typing */
+  .hits { display: none; position: absolute; left: 0; right: 0; top: 100%; margin-top: 2px; z-index: 5; background: #fff; border: 1px solid #ccc; border-radius: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); overflow: hidden; }
+  .hits.open { display: block; }
+  .hit { display: flex; align-items: baseline; gap: 8px; padding: 5px 9px; cursor: pointer; }
+  .hit .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .hit .why { display: block; color: var(--mute); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .hit .add { font-size: 11px; color: var(--mute); border: 1px solid transparent; border-radius: 3px; padding: 0 5px; }
+  .hit .add { visibility: hidden; }
+  .hit:hover .add, .hit.on .add { visibility: visible; }
+  .hit .add:hover { border-color: #bbb; color: var(--ink); }
+  .hit.on { background: #f2f2f2; }
+  .hit.off .nm { color: var(--mute); }
+  .hits .none { padding: 6px 9px; color: var(--mute); font-size: 12px; }
+  .sub { color: var(--mute); font-size: 12px; margin-top: 4px; min-height: 1.4em; }
+  #error { color: #a33; font-size: 12px; margin-top: 2px; }
+  select.scenes { margin-top: 6px; font-size: 12px; padding: 4px 8px; color: var(--mute); }
   /* the resonance switch */
   .switch { display: flex; align-items: center; gap: 10px; margin-top: 16px; cursor: pointer; user-select: none; }
   .switch input { display: none; }
@@ -36,7 +52,6 @@
   button.small { font: inherit; font-size: 12px; color: var(--ink); background: #fff; border: 1px solid #ccc; border-radius: 4px; padding: 4px 10px; cursor: pointer; }
   button.small:hover { border-color: var(--ink); }
   button.small:disabled { color: #bbb; border-color: #e3e3e3; cursor: default; }
-  select.add { margin-top: 6px; font-size: 12px; padding: 4px 8px; color: var(--mute); }
   .table { display: grid; grid-template-columns: repeat(8, 1fr); gap: 3px; margin-top: 12px; }
   .table button { font: inherit; font-size: 12px; color: var(--ink); background: #fff; border: 1px solid #ddd; border-radius: 3px; padding: 5px 0; cursor: grab; }
   .table button:hover { border-color: var(--ink); }
@@ -59,16 +74,16 @@
 <body>
   <div id="panel">
     <h1>Electron Flow</h1>
-    <select id="case"></select>
-    <form id="smiles-form" class="smiles"><input id="smiles" type="text" placeholder="or type a SMILES and press enter" spellcheck="false" autocomplete="off"></form>
+    <form id="search-form" class="search"><input id="search" type="text" placeholder="a name or a SMILES" spellcheck="false" autocomplete="off"><div id="hits" class="hits"></div></form>
+    <div id="sub" class="sub"></div>
     <div id="error"></div>
+    <select id="case" class="scenes" title="reagents placed together, with the textbook arrows behind a button"></select>
     <label class="switch"><input id="resonance" type="checkbox"><span class="track"></span><span>resonance structures</span></label>
     <div id="steps" class="steps"><button id="prev" title="previous structure (left arrow)">&#8592;</button><button id="next" title="next structure (right arrow)">&#8594;</button></div>
     <div id="status"></div>
     <div id="note" class="note"></div>
     <div class="row"><button id="go" class="small" disabled>make the move</button><button id="undo" class="small" disabled>clear arrows</button><button id="show" class="small" style="display:none">show the arrows</button></div>
     <div class="row"><button id="fill" class="small">fill hydrogens</button><button id="clear" class="small">new molecule</button></div>
-    <select id="add" class="add" title="bring a second compound in beside what is on screen"></select>
     <div id="table" class="table" title="click an element to add it to the selected atom, or drag it onto an atom"></div>
     <details class="fold">
       <summary>editing</summary>
@@ -76,7 +91,7 @@
     </details>
     <details class="fold">
       <summary>moves</summary>
-      <p>Drag from a pair of dots or from a bond to an atom or to a bond to draw an arrow for one pair of electrons. A lone pair can only become a bond to its own atom; a bond's pair can become a lone pair on one of its atoms or a bond from one of them to a third atom. Enter, or the button, makes the move: if no bond is made or broken the arrows show resonance and the picture changes to that structure; if a bond is made or broken the move plays from before to after, every bond and charge sliding to its new value. A move that would give an atom more than its octet, or leave a hydrogen with nothing, is refused with the reason. Pick a reaction to get the reagents placed together; the button shows the textbook arrows. Add to the scene brings in a second compound.</p>
+      <p>Drag from a pair of dots or from a bond to an atom or to a bond to draw an arrow for one pair of electrons. A lone pair can only become a bond to its own atom; a bond's pair can become a lone pair on one of its atoms or a bond from one of them to a third atom. Enter, or the button, makes the move: if no bond is made or broken the arrows show resonance and the picture changes to that structure; if a bond is made or broken the move plays from before to after, every bond and charge sliding to its new value. A move that would give an atom more than its octet, or leave a hydrogen with nothing, is refused with the reason. Pick a reaction to get the reagents placed together; the button shows the textbook arrows. To bring in a second compound, search for it and press add beside its name (or shift-enter).</p>
     </details>
     <details class="fold">
       <summary>rules</summary>

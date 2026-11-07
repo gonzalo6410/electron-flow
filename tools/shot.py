@@ -10,7 +10,7 @@ async def main():
         await pg.goto('http://localhost:8765/index.html')
         await pg.wait_for_timeout(2500)
         smi = sys.argv[1]; res = sys.argv[2] == 'on'; wait = int(sys.argv[3]); out = sys.argv[4]
-        await pg.fill('#smiles', smi); await pg.press('#smiles', 'Enter')
+        await pg.fill('#search', smi); await pg.press('#search', 'Enter')
         if res: await pg.click('.switch')
         await pg.wait_for_timeout(wait)
         await pg.screenshot(path=out)
