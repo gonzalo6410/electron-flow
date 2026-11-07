@@ -16,6 +16,10 @@ export function emptySpec() { return { atoms: [], adj: [], charge: 0 }; }
 // its atoms are dropped, so plus and minus on the page mean what they say
 const plain = atoms => atoms.map(a => (a.ion ? { el: a.el, ion: a.ion } : { el: a.el }));
 
+// a spectator anion (a loose Cl-) that the student bonds to something stops being a spectator: it
+// becomes an ordinary atom and the engine works out its bonds and charge with the rest
+const joined = (atoms, i) => (atoms[i].ion ? { el: atoms[i].el } : atoms[i]);
+
 export function neighbours(spec, i) {
   return spec.adj.filter(([a, b]) => a === i || b === i).map(([a, b]) => (a === i ? b : a));
 }
@@ -26,7 +30,7 @@ export function addAtom(spec, el, parent = null) {
   const atoms = [...plain(spec.atoms), { el }];
   const adj = [...spec.adj];
   const index = atoms.length - 1;
-  if (parent !== null) adj.push([parent, index]);
+  if (parent !== null) { adj.push([parent, index]); atoms[parent] = joined(atoms, parent); }
   return { spec: { atoms, adj, charge: spec.charge }, index };
 }
 
@@ -44,14 +48,20 @@ export function removeAtom(spec, i, withHydrogens = true) {
   return { atoms, adj, charge: spec.charge, removed: [...gone].sort((a, b) => a - b) };
 }
 
-// make or unmake a bond between two existing atoms (ring closure, or cutting a ring)
+// make or unmake a bond between two existing atoms (ring closure, or cutting a ring); a pair that is
+// only the tie holding a spectator anion beside its partner becomes a real bond
 export function toggleBond(spec, i, j) {
   if (i === j) return spec;
   const key = ([a, b]) => `${Math.min(a, b)}-${Math.max(a, b)}`;
   const want = key([i, j]);
   const has = spec.adj.some(e => key(e) === want);
-  const adj = has ? spec.adj.filter(e => key(e) !== want) : [...spec.adj, [Math.min(i, j), Math.max(i, j)]];
-  return { atoms: plain(spec.atoms), adj, charge: spec.charge };
+  const atoms = plain(spec.atoms);
+  const tie = has && !!(atoms[i].ion || atoms[j].ion);
+  let adj = spec.adj;
+  if (!has) adj = [...spec.adj, [Math.min(i, j), Math.max(i, j)]];
+  else if (!tie) adj = spec.adj.filter(e => key(e) !== want);
+  if (!has || tie) { atoms[i] = joined(atoms, i); atoms[j] = joined(atoms, j); }
+  return { atoms, adj, charge: spec.charge };
 }
 
 export function setCharge(spec, charge) { return { atoms: plain(spec.atoms), adj: spec.adj, charge }; }
@@ -76,13 +86,10 @@ export function fillHydrogens(spec) {
 }
 
 // a starting position for a new atom next to its parent: away from the parent's other neighbours,
-// at a plausible bond length; free atoms go a little to the right of everything
+// at a plausible bond length (a free atom is placed by the page, which knows where the student is
+// looking from)
 export function placeNear(positions, parentIndex, elNew, spec) {
   const r = element(elNew).radius;
-  if (parentIndex === null) {
-    const maxX = positions.length ? Math.max(...positions.map(p => p[0])) : -3;
-    return [maxX + 3, 0, 0];
-  }
   const p = positions[parentIndex];
   const d = r + element(spec.atoms[parentIndex].el).radius;
   const nbrs = neighbours(spec, parentIndex).filter(j => j < positions.length);

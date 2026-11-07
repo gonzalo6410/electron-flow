@@ -35,6 +35,8 @@
   .row { display: flex; gap: 6px; margin-top: 6px; }
   button.small { font: inherit; font-size: 12px; color: var(--ink); background: #fff; border: 1px solid #ccc; border-radius: 4px; padding: 4px 10px; cursor: pointer; }
   button.small:hover { border-color: var(--ink); }
+  button.small:disabled { color: #bbb; border-color: #e3e3e3; cursor: default; }
+  select.add { margin-top: 6px; font-size: 12px; padding: 4px 8px; color: var(--mute); }
   .table { display: grid; grid-template-columns: repeat(8, 1fr); gap: 3px; margin-top: 12px; }
   .table button { font: inherit; font-size: 12px; color: var(--ink); background: #fff; border: 1px solid #ddd; border-radius: 3px; padding: 5px 0; cursor: grab; }
   .table button:hover { border-color: var(--ink); }
@@ -64,18 +66,24 @@
     <div id="steps" class="steps"><button id="prev" title="previous structure (left arrow)">&#8592;</button><button id="next" title="next structure (right arrow)">&#8594;</button></div>
     <div id="status"></div>
     <div id="note" class="note"></div>
+    <div class="row"><button id="go" class="small" disabled>make the move</button><button id="undo" class="small" disabled>clear arrows</button><button id="show" class="small" style="display:none">show the arrows</button></div>
     <div class="row"><button id="fill" class="small">fill hydrogens</button><button id="clear" class="small">new molecule</button></div>
+    <select id="add" class="add" title="bring a second compound in beside what is on screen"></select>
     <div id="table" class="table" title="click an element to add it to the selected atom, or drag it onto an atom"></div>
     <details class="fold">
       <summary>editing</summary>
       <p>Click an atom to select it. Press a letter to add an atom bonded to it: C N O F S P B H, and L for Cl, R for Br, I for iodine, A for Na, K, M for Mg. Or click an element in the table, or drag one onto an atom. Delete removes the selected atom with its hydrogens. Shift-click another atom to bond or unbond the two. Plus and minus set the overall charge. Shift-H fills every atom's usual bonds with hydrogens. The engine works out bond orders, lone pairs and charges from what is there; to make a double bond, take hydrogens away.</p>
     </details>
     <details class="fold">
+      <summary>moves</summary>
+      <p>Drag from a pair of dots or from a bond to an atom or to a bond to draw an arrow for one pair of electrons. A lone pair can only become a bond to its own atom; a bond's pair can become a lone pair on one of its atoms or a bond from one of them to a third atom. Enter, or the button, makes the move: if no bond is made or broken the arrows show resonance and the picture changes to that structure; if a bond is made or broken the move plays from before to after, every bond and charge sliding to its new value. A move that would give an atom more than its octet, or leave a hydrogen with nothing, is refused with the reason. Pick a reaction to get the reagents placed together; the button shows the textbook arrows. Add to the scene brings in a second compound.</p>
+    </details>
+    <details class="fold">
       <summary>rules</summary>
       <p>The octet is never exceeded. Contributing structures are the ones with the fewest octet holes. A sigma bond breaks only where the octet forces it. No formal charge beyond plus or minus one unless every structure has one. All contributing structures weigh the same. Structures that are the same picture with atoms renamed form one family and alternate on their own; different structures are stepped through with the arrows. Shapes follow the electron groups around each atom; bond lengths and angles are relaxed as springs.</p>
     </details>
   </div>
-  <div id="view"><div id="hint">drag to turn · wheel to zoom · right-drag to move · arrow keys step the structures · space pauses</div><div id="tip"></div></div>
+  <div id="view"><div id="hint">drag to turn · wheel to zoom · right-drag to move · arrow keys step the structures · space pauses · drag from dots or a bond to draw an arrow · Enter makes the move</div><div id="tip"></div></div>
   <script type="module" src="./app.js"></script>
 </body>
 </html>

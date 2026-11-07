@@ -7,7 +7,8 @@
 //   - never lets any atom count more than its ceiling (2 for H and He, 8 otherwise),
 //   - keeps every atom closed shell unless the electron count is odd (then exactly one atom is a radical),
 // then keeps only the assignments with the fewest holes (missing electron pairs),
-// then among those the ones with the fewest adjacent pairs cut to order 0. His rule (5 Nov 2026):
+// then among those the ones with the fewest adjacent pairs cut to order 0 (both rules are built into
+// the search itself, see searchOrders). His rule (5 Nov 2026):
 // sigma bonds do not break inside a node; a pair is cut only when the octet ceiling leaves no room
 // for the bond, as the two spare F in SF6. This one rule removes three acetylenes from benzene,
 // O=C=O plus a free CH3- from acetate, the free Cl- structures from POCl3, and N+ with one O2- from
@@ -44,8 +45,6 @@ export function buildNode({ atoms, adj, charge = 0 }) {
   if (atoms.every(a => Number.isInteger(a.written))) out.forEach((a, k) => { a.written = atoms[k].written; });
   return { atoms: out, els, edges, charge, fixed };
 }
-
-export const isIon = (node, i) => !!node.fixed[i];
 
 // The pieces of a node: connected parts of the adjacency, each with the electrons it owns.
 export function pieces(node) {
@@ -136,7 +135,6 @@ export function enumerate(node) {
   }
   if (!structures.length) throw new Error('no Lewis structure found');
   const holes = sumCeil - pool - 2 * S; // in electrons
-  const rejectedByCuts = []; // kept for callers; the search no longer lists what this rule drops
 
   // ring rule: no atom in a ring of seven or fewer atoms carries two pi parts (two double bonds, or a
   // triple bond), because such an atom would be linear and a small ring cannot hold it. This removes
@@ -168,7 +166,7 @@ export function enumerate(node) {
   const w = 1 / structures.length;
   structures.forEach(s => { s.weight = w; });
 
-  return { pool, holes, structures, avg: average(structures, edges.length, n), rejectedByCuts, rejectedByMagnitude, edges, radicals };
+  return { pool, holes, structures, avg: average(structures, edges.length, n), rejectedByMagnitude, edges, radicals };
 }
 
 // every way of taking one item from each list
@@ -216,7 +214,7 @@ export function hybrid(nodeA, nodeB, mix = 0.5) {
   const transitionEdges = edges.map(e => !(inA.has(key(e)) && inB.has(key(e)))); // made or broken
   return {
     pool: rA.pool, holes: Math.max(rA.holes, rB.holes), structures, edges, transitionEdges,
-    avg: average(structures, edges.length, n), rejectedByCuts: [], rejectedByMagnitude: [], radicals: rA.radicals,
+    avg: average(structures, edges.length, n), rejectedByMagnitude: [], radicals: rA.radicals,
     before: rA, after: rB,
   };
 }
@@ -339,7 +337,6 @@ export function describe(node, result, opts = {}) {
   const sym = node.atoms.map(a => a.el);
   const lines = [];
   lines.push(`electrons ${result.pool}, holes ${result.holes} electrons, ${result.structures.length} contributing structure(s)` +
-    (result.rejectedByCuts.length ? `, ${result.rejectedByCuts.length} dropped by the cut-pair rule` : '') +
     (result.rejectedByMagnitude.length ? `, ${result.rejectedByMagnitude.length} dropped by the magnitude rule` : ''));
   const fmt = x => (Number.isInteger(x) ? String(x) : x.toFixed(3));
   lines.push('average bond orders: ' + result.edges.map(([i, j], k) => `${sym[i]}${i}-${sym[j]}${j} ${fmt(result.avg.orders[k])}`).join(', '));

@@ -24,9 +24,6 @@ for (const c of CASES) {
   for (const [i, v] of Object.entries(e.count || {})) if (Math.abs(r.avg.count[i] - v) > EPS) problems.push(`count on atom ${i} ${r.avg.count[i]}, expected ${v}`);
   console.log(`\n== ${c.name} (${ms} ms) ${problems.length ? 'FAIL' : 'ok'}`);
   console.log(describe(node, r, { all: process.argv.includes('--all') }));
-  if (r.rejectedByCuts.length && process.argv.includes('--all')) {
-    r.rejectedByCuts.slice(0, 12).forEach(st => console.log(`  dropped by cut-pair rule: orders [${st.orders.join(' ')}] charge [${st.charge.join(' ')}]`));
-  }
   if (c.hisStatement) console.log('  NOTE: engine default differs from his statement (' + c.hisStatement + '); open call');
   problems.forEach(p => console.log('  PROBLEM: ' + p));
   failures += problems.length;

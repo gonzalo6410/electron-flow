@@ -62,8 +62,25 @@ const node = buildNode(ring); const geo = relax(node, rr);
 const pNew = placeNear(geo.pos, 0, 'Cl', ring);
 const dist = Math.hypot(pNew[0] - geo.pos[0][0], pNew[1] - geo.pos[0][1], pNew[2] - geo.pos[0][2]);
 check('new atom placed about a bond length away', dist > 1.5 && dist < 2.0);
-const freePos = placeNear(geo.pos, null, 'Na', ring);
-check('free atom placed to the right of everything', freePos[0] > Math.max(...geo.pos.map(p => p[0])));
+
+// a spectator anion the student bonds to stops being a spectator: adding O to the Cl- of NaCl gives a
+// bonded Cl-O, and shift-clicking the Cl- of a methyl cation onto its carbon turns the tie into a bond
+{
+  const { nodeFromSmiles } = await import('../core/smiles.js');
+  const nacl = nodeFromSmiles('[Na+].[Cl-]');
+  const cl = nacl.atoms.findIndex(a => a.el === 'Cl');
+  const withO = addAtom(nacl, 'O', cl);
+  const ro = enumerate(buildNode(withO.spec));
+  const clO = withO.spec.adj.findIndex(([a, b]) => (a === cl && b === withO.index) || (b === cl && a === withO.index));
+  check('O added to a loose Cl- is bonded to it', !withO.spec.atoms[cl].ion && ro.structures[0].orders[clO] === 1, `ion ${withO.spec.atoms[cl].ion}, order ${ro.structures[0].orders[clO]}`);
+  const mecl = nodeFromSmiles('[CH3+].[Cl-]');
+  const c = mecl.atoms.findIndex(a => a.el === 'C'), cl2 = mecl.atoms.findIndex(a => a.el === 'Cl');
+  const bonded = toggleBond(mecl, c, cl2);
+  const rb = enumerate(buildNode(bonded));
+  check('shift-click across the tie of a methyl cation and Cl- makes chloromethane', bonded.adj.length === mecl.adj.length && !bonded.atoms[cl2].ion && rb.structures.length === 1 && rb.avg.charge.every(q => q === 0), `charges ${JSON.stringify(rb.avg.charge)}`);
+  const unbonded = toggleBond(bonded, c, cl2);
+  check('shift-click again takes the bond away', unbonded.adj.length === bonded.adj.length - 1);
+}
 
 console.log(bad ? `${bad} problem(s)` : 'edit tests pass');
 process.exit(bad ? 1 : 0);

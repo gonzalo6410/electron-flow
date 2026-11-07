@@ -148,5 +148,21 @@ const sortedAngles = (p, i, nbrs) => { const out = []; for (let a = 0; a < nbrs.
   const nitromethane = fromSmiles('C[N+](=O)[O-]'); // N1 O2: order 1.5, not a single bond
   expect('nitromethane N-O by the order rule', dist(nitromethane.geo.pos, 1, 2), 1.2808, 0.02);
 }
+// loose ions: at their ionic radius plus the partner's covalent radius plus 0.7, never as close as a
+// bond, and started where they do not sit on a hydrogen: in the plane of a flat cation between two
+// of its bonds, through a face of a tetrahedral one
+{
+  const mecl = fromSmiles('[CH3+].[Cl-]'); // C0 Cl1 H2 H3 H4
+  expect('methyl cation: Cl- sits 3.27 from the carbon', dist(mecl.geo.pos, 0, 1), 3.27, 0.05);
+  expect('methyl cation: Cl- in the plane of the CH3 (out of plane)', outOfPlane(mecl.geo.pos, [0, 1, 2, 3, 4]), 0, 0.05);
+  expect('methyl cation: Cl- at least 2.5 from every hydrogen', Math.min(...[2, 3, 4].map(h => dist(mecl.geo.pos, 1, h))), 3.0, 0.5);
+  const nh4cl = fromSmiles('[NH4+].[Cl-]'); // N0 Cl1 H2..H5
+  expect('ammonium: Cl- sits 3.2 from the nitrogen', dist(nh4cl.geo.pos, 0, 1), 3.2, 0.1);
+  expect('ammonium: Cl- through a face, three hydrogens at 3.0 and one beyond 4', [2, 3, 4, 5].map(h => dist(nh4cl.geo.pos, 1, h)).sort((a, b) => a - b)[3], 4.2, 0.2);
+  const nacl = fromSmiles('[Na+].[Cl-]');
+  expect('sodium chloride: the two ions 2.83 apart', dist(nacl.geo.pos, 0, 1), 2.83, 0.05);
+  const acetate = fromSmiles('CC(=O)[O-].[Na+]'); // C0 C1 O2 O3 Na4
+  expect('sodium acetate: Na+ between 2.4 and 3.3 from its oxygen (the pushes decide)', dist(acetate.geo.pos, 3, 4), 2.85, 0.45);
+}
 console.log(bad ? `${bad} problem(s)` : 'all shapes as expected');
 process.exit(bad ? 1 : 0);

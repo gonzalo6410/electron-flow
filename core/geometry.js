@@ -16,6 +16,7 @@
 //    a tether too weak to bend the partner.
 
 import { element } from './elements.js';
+import { sub, add, scale, dot, cross, len, norm, rotate } from './vectors.js';
 
 const DEG = Math.PI / 180;
 
@@ -30,25 +31,22 @@ const TEMPLATES = {
 };
 const AXIAL = { 5: [0, 1], 6: [0, 1] };
 
-function norm(v) { const l = Math.hypot(...v); return v.map(x => x / l); }
-function sub(a, b) { return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]; }
-function add(a, b) { return [a[0] + b[0], a[1] + b[1], a[2] + b[2]]; }
-function scale(a, s) { return [a[0] * s, a[1] * s, a[2] * s]; }
-function dot(a, b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
-function cross(a, b) { return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]; }
-function len(a) { return Math.hypot(a[0], a[1], a[2]); }
-
 // Bond length rule: sum of covalent radii, times a factor by bond order.
 // Order 1 -> 1.00, 2 -> 0.87, 3 -> 0.78 (C-C 1.54, C=C 1.34, C#C 1.20). Below 1 the bond lengthens.
 // A partial bond inside one node (the 2/3 bonds of SF6) keeps the single-bond length: the octet
 // limit shares the bonds out, it does not stretch them. A partial bond of a transition hybrid
-// (the half bonds of the SN2 state) is a bond being made or broken and is drawn long.
+// (the half bonds of the SN2 state) is a bond being made or broken and is drawn long: 1.25 times
+// the single length at order 1/2, and below that longer still, up to twice the single length as
+// the order goes to zero, so that a move played as a film shows the two atoms drifting together
+// before the bond takes hold (the spring of such a bond is also weak at low order, springTerms).
 export function bondLength(elI, elJ, order, transition = false) {
   const base = element(elI).radius + element(elJ).radius;
   let f;
   if (order >= 2) f = 0.87 - 0.09 * (order - 2);
   else if (order >= 1) f = 1 - 0.13 * (order - 1);
-  else f = transition ? 1 + 0.5 * (1 - order) : 1;
+  else if (!transition) f = 1;
+  else if (order >= 0.5) f = 1 + 0.5 * (1 - order);
+  else f = 1.25 + 1.5 * (0.5 - order);
   return base * f;
 }
 
@@ -176,10 +174,7 @@ function rotationAtoB(a, b) {
   const k = 1 / (1 + c);
   return u => add(add(scale(u, c), scale(cross(v, u), 1)), scale(v, dot(v, u) * k));
 }
-function rotateAbout(axis, ang) {
-  const c = Math.cos(ang), s = Math.sin(ang);
-  return u => add(add(scale(u, c), scale(cross(axis, u), s)), scale(axis, dot(axis, u) * (1 - c)));
-}
+function rotateAbout(axis, ang) { return u => rotate(u, axis, ang); }
 
 function edgeIndex(result, i, j) {
   return result.edges.findIndex(([a, b]) => (a === i && b === j) || (a === j && b === i));
@@ -291,14 +286,11 @@ function initialPlace(node, result, groups) {
         pos[j] = add(pos[i], scale(dir, d));
         if (!seen.has(j)) { seen.add(j); queue.push({ i: j, parent: i, grand: parent, ringSign: -ringSign }); }
       });
-      // ionic partners: beside the atom, away from its neighbours
+      // ionic partners: beside the atom, in the most open direction between its neighbours
       for (const j of groups[i].assoc) {
         if (pos[j] !== null) continue;
-        let away = [0, 0, 0];
-        for (const nb of groups[i].nbrs) away = add(away, norm(sub(pos[i], pos[nb.j])));
-        if (len(away) < 1e-6) away = [0, 1, 0];
-        const d = element(sym[i]).radius + element(sym[j]).radius + 0.2;
-        pos[j] = add(pos[i], scale(norm(away), d));
+        const away = ionDirection(groups[i].nbrs.filter(nb => pos[nb.j] !== null).map(nb => norm(sub(pos[nb.j], pos[i]))));
+        pos[j] = add(pos[i], scale(away, ionDistance(node, i, j)));
         if (!seen.has(j)) { seen.add(j); queue.push({ i: j, parent: i, grand: parent, ringSign }); }
       }
     }
@@ -387,6 +379,33 @@ function angleTargets(groups, i, T, slots) {
 // and the Cl and must not pull the O-C-Cl axis off straight; the pushes keep it clear of the rest).
 const LOOSE = 0.01;
 
+// How far a spectator ion sits from its partner: the ion at its ionic radius, the partner at its own
+// ionic radius if it is an ion too (Na+ to Cl- 2.83) and otherwise at its covalent radius plus 0.7,
+// which is about what the first-row atoms gain on becoming anions (O 0.66 to O2- 1.40). Na+ sits
+// 2.4 from an O-, Cl- 3.3 from a C+ and 3.2 from the N of ammonium, so a loose ion never comes as
+// close as a bond would. Covalent radii alone put Cl- 2.0 from a carbocation, which read as a bond.
+function ionDistance(node, i, j) {
+  const size = k => {
+    const e = element(node.atoms[k].el);
+    return node.fixed[k] && e.ionRadius ? e.ionRadius : e.radius + 0.7;
+  };
+  return size(i) + size(j);
+}
+
+// Where a spectator ion starts beside an atom with bonds in the given unit directions: away from a
+// single bond, away from the pair of a bent atom, and opposite one of the bonds of an atom with three
+// or more, which puts it between the others: in the plane of a flat CH3+ (so the page can look at the
+// face of the cation with its Cl- beside it) and through a face of a tetrahedral NH4+. It never starts
+// on top of a hydrogen, and the pushes settle where it ends.
+function ionDirection(dirs) {
+  if (!dirs.length) return [0, 1, 0];
+  if (dirs.length >= 3) return scale(dirs[0], -1);
+  const away = scale(dirs.reduce((s, d) => add(s, d), [0, 0, 0]), -1);
+  if (len(away) > 1e-6) return norm(away);
+  const d = dirs[0]; // two bonds on one line: any direction across it
+  return norm(cross(d, Math.abs(d[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0]));
+}
+
 // The spring terms, built once per molecule from the rules above. Positions are handled as one flat
 // array x = [x0, y0, z0, x1, y1, z1, ...] so the relaxation can work on it directly.
 function springTerms(node, result, groups) {
@@ -397,8 +416,10 @@ function springTerms(node, result, groups) {
   const bonds = []; // {i, j, d0, k}
   result.edges.forEach(([i, j], k) => {
     const o = result.avg.orders[k];
-    if (o > 1e-9) bonds.push({ i, j, d0: edgeLength(node, result, k), order: o, k: kb });
-    else if (node.fixed[i] || node.fixed[j]) bonds.push({ i, j, d0: element(sym[i]).radius + element(sym[j]).radius + 0.2, order: 0, k: LOOSE * kb });
+    const transition = !!(result.transitionEdges && result.transitionEdges[k]);
+    // a bond being made or broken pulls weakly while its order is small (full strength from 1/2 up)
+    if (o > 1e-9) bonds.push({ i, j, d0: edgeLength(node, result, k), order: o, k: kb * (transition ? Math.min(1, Math.max(0.1, 2 * o)) : 1) });
+    else if (node.fixed[i] || node.fixed[j]) bonds.push({ i, j, d0: ionDistance(node, i, j), order: 0, k: LOOSE * kb });
   });
 
   // angle terms from template slots; the target can be narrowed by lone pairs or set by a ring
@@ -610,41 +631,15 @@ export function relax(node, result, opts = {}) {
   const x = new Float64Array(pos.flat());
   const done = minimize(model, x, { maxIter: opts.iters ?? 500 });
   pos = pos.map((_, i) => [done.x[3 * i], done.x[3 * i + 1], done.x[3 * i + 2]]);
-  // centre on the heavy atoms
-  const heavy = node.atoms.map((a, i) => i).filter(i => node.atoms[i].el !== 'H');
-  const ref = heavy.length ? heavy : node.atoms.map((_, i) => i);
-  const c = scale(ref.reduce((s, i) => add(s, pos[i]), [0, 0, 0]), 1 / ref.length);
-  pos = pos.map(p => sub(p, c));
+  // centre on the heavy atoms; a molecule relaxed from given positions (an edit) stays where it was,
+  // so the picture does not shift with every change
+  if (!opts.start) {
+    const heavy = node.atoms.map((a, i) => i).filter(i => node.atoms[i].el !== 'H');
+    const ref = heavy.length ? heavy : node.atoms.map((_, i) => i);
+    const c = scale(ref.reduce((s, i) => add(s, pos[i]), [0, 0, 0]), 1 / ref.length);
+    pos = pos.map(p => sub(p, c));
+  }
   return { pos, energy: done.energy, groups, iterations: done.iterations };
-}
-
-// Directions for drawing lone pairs: unit vectors that keep away from the bonded neighbours and from
-// each other (points repelling on a sphere). Returns an array per atom of `count` unit vectors.
-export function lonePairDirections(pos, groups, counts) {
-  return pos.map((p, i) => {
-    const want = counts[i];
-    if (!want) return [];
-    const nbrDirs = groups[i].nbrs.map(nb => norm(sub(pos[nb.j], p)));
-    // start: opposite the mean neighbour direction, spread by small fixed offsets
-    let mean = nbrDirs.reduce((s, d) => add(s, d), [0, 0, 0]);
-    let away = len(mean) > 1e-6 ? scale(norm(mean), -1) : [0, 0, 1];
-    const perp = norm(cross(away, Math.abs(away[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0]));
-    const perp2 = cross(away, perp);
-    let dirs = [];
-    for (let q = 0; q < want; q++) {
-      const ang = (2 * Math.PI * q) / want;
-      dirs.push(norm(add(away, add(scale(perp, 0.6 * Math.cos(ang)), scale(perp2, 0.6 * Math.sin(ang))))));
-    }
-    for (let it = 0; it < 60; it++) {
-      dirs = dirs.map((d, q) => {
-        let f = [0, 0, 0];
-        for (const nd of nbrDirs) { const diff = sub(d, nd); const r = len(diff) + 1e-6; f = add(f, scale(diff, 1 / (r * r * r))); }
-        dirs.forEach((o, r) => { if (r !== q) { const diff = sub(d, o); const rr = len(diff) + 1e-6; f = add(f, scale(diff, 1 / (rr * rr * rr))); } });
-        return norm(add(d, scale(f, 0.1)));
-      });
-    }
-    return dirs;
-  });
 }
 
 export function geometryReport(node, result, geo) {

@@ -16,20 +16,7 @@
 // the SN2 state points its half pair at carbon), otherwise a pair in the p orbital (the amide N pair,
 // the third pair of a carboxylate O), otherwise placed by repulsion.
 
-const EPS = 1e-9;
-function sub(a, b) { return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]; }
-function add(a, b) { return [a[0] + b[0], a[1] + b[1], a[2] + b[2]]; }
-function scale(a, s) { return [a[0] * s, a[1] * s, a[2] * s]; }
-function dot(a, b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
-function cross(a, b) { return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]; }
-function len(a) { return Math.hypot(a[0], a[1], a[2]); }
-function norm(a) { const l = len(a); return l < EPS ? [0, 0, 0] : scale(a, 1 / l); }
-function perpTo(v, axis) { return norm(sub(v, scale(axis, dot(v, axis)))); }
-function anyPerp(axis) { return perpTo(Math.abs(axis[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0], axis); }
-function rotate(v, axis, ang) {
-  const c = Math.cos(ang), s = Math.sin(ang);
-  return add(add(scale(v, c), scale(cross(axis, v), s)), scale(axis, dot(axis, v) * (1 - c)));
-}
+import { sub, add, scale, dot, cross, len, norm, perpTo, anyPerp, rotate } from './vectors.js';
 
 // pic: { orders, lone } for the picture being drawn (one structure, or the average)
 export function piFrame(node, result, pos, groups, pic) {

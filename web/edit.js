@@ -60,15 +60,17 @@ export function attachEditor(api) {
     if (moved || !api.isEditable()) return;
     const i = atomAt(e);
     if (shift && selected !== null && i !== null && i !== selected) {
-      apply(toggleBond(api.getSpec(), selected, i), api.getPositions(), 'bond');
+      apply(toggleBond(api.getSpec(), selected, i), api.getPositions());
       return;
     }
     select(i);
   });
 
-  function apply(spec, start, what) {
+  // show an edited molecule, relaxed from the given positions; a change for which the engine finds
+  // no Lewis structure is refused, and the molecule stays as it was
+  function apply(spec, start) {
     try {
-      api.loadSpec(spec, start, 'edited');
+      api.loadSpec(spec, start);
       refreshHalo();
       note();
     } catch (err) {
@@ -92,52 +94,70 @@ export function attachEditor(api) {
       const gone = new Set(next.removed);
       const heavyNb = neighbours(spec, victim).find(j => !gone.has(j));
       selected = heavyNb === undefined ? null : heavyNb - next.removed.filter(g => g < heavyNb).length;
-      apply(next, pos.filter((_, k) => !gone.has(k)), 'remove');
+      apply(next, pos.filter((_, k) => !gone.has(k)));
       e.preventDefault();
     } else if (e.key === '+' || e.key === '=') {
-      apply(setCharge(spec, spec.charge + 1), pos, 'charge');
+      apply(setCharge(spec, spec.charge + 1), pos);
     } else if (e.key === '-' || e.key === '_') {
-      apply(setCharge(spec, spec.charge - 1), pos, 'charge');
+      apply(setCharge(spec, spec.charge - 1), pos);
     } else if (e.key === 'Escape') {
       select(null);
     } else if (e.key === 'H' && e.shiftKey) {
-      const r = fillHydrogens(spec);
-      const start = [...pos];
-      for (const a of r.added) start.push(placeNear(start, a.parent, 'H', r.spec));
-      apply(r.spec, start, 'fill');
+      fill();
       e.preventDefault();
     }
   });
 
-  function addElement(el, parent) {
-    const spec = api.getSpec(), pos = api.getPositions();
-    const r = addAtom(spec, el, parent);
-    const start = [...pos, placeNear(pos, parent, el, r.spec)];
-    selected = r.index;
-    apply(r.spec, start, 'add');
+  // where a free atom goes: where it was dropped, at the depth of the middle of the molecule; from the
+  // keyboard or the table, a little to the right of everything as seen on the screen
+  function freePosition(event) {
+    const pos = api.getPositions().map(p => new THREE.Vector3(...p));
+    const centre = pos.reduce((s, p) => s.add(p), new THREE.Vector3()).divideScalar(Math.max(1, pos.length));
+    if (event) {
+      const rect = api.domElement.getBoundingClientRect();
+      pointer.set(((event.clientX - rect.left) / rect.width) * 2 - 1, -((event.clientY - rect.top) / rect.height) * 2 + 1);
+      raycaster.setFromCamera(pointer, api.camera);
+      const toViewer = api.camera.getWorldDirection(new THREE.Vector3()).negate();
+      const hit = raycaster.ray.intersectPlane(new THREE.Plane().setFromNormalAndCoplanarPoint(toViewer, centre), new THREE.Vector3());
+      if (hit) return hit.toArray();
+    }
+    const right = new THREE.Vector3().setFromMatrixColumn(api.camera.matrixWorld, 0);
+    const reach = pos.reduce((m, p) => Math.max(m, p.clone().sub(centre).dot(right)), 0);
+    return centre.addScaledVector(right, reach + 3).toArray();
   }
 
-  // drops from the periodic table: onto an atom bonds to it, onto empty space makes a free atom
+  function addElement(el, parent, event = null) {
+    const spec = api.getSpec(), pos = api.getPositions();
+    const r = addAtom(spec, el, parent);
+    const start = [...pos, parent === null ? freePosition(event) : placeNear(pos, parent, el, r.spec)];
+    selected = r.index;
+    apply(r.spec, start);
+  }
+
+  // drops from the periodic table: onto an atom bonds to it, onto empty space makes a free atom there
   api.domElement.addEventListener('dragover', e => { e.preventDefault(); });
   api.domElement.addEventListener('drop', e => {
     e.preventDefault();
     const el = e.dataTransfer.getData('text/element');
     if (!el || !api.isEditable()) return;
-    addElement(el, atomAt(e));
+    addElement(el, atomAt(e), e);
   });
+
+  // give every atom its usual number of bonds with hydrogens, each placed beside its parent
+  function fill() {
+    const spec = api.getSpec(), pos = api.getPositions();
+    const r = fillHydrogens(spec);
+    const start = [...pos];
+    for (const a of r.added) start.push(placeNear(start, a.parent, 'H', r.spec));
+    apply(r.spec, start);
+  }
 
   return {
     addElement,
+    fill,
     selectedAtom() { return selected; },
     onLoaded() { select(null); },
     refresh() { refreshHalo(); },
-    fill() {
-      const spec = api.getSpec(), pos = api.getPositions();
-      const r = fillHydrogens(spec);
-      const start = [...pos];
-      for (const a of r.added) start.push(placeNear(start, a.parent, 'H', r.spec));
-      apply(r.spec, start, 'fill');
-    },
-    clear() { selected = null; apply({ atoms: [], adj: [], charge: 0 }, [], 'clear'); },
+    clear() { selected = null; apply({ atoms: [], adj: [], charge: 0 }, []); },
   };
 }

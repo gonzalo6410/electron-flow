@@ -69,6 +69,36 @@ for (const [s, why] of [['C(', 'unmatched parenthesis'], ['C)', 'closing parenth
   const { r } = run('O=C=O.O=C=O');
   check('two CO2 pieces: three structures each, nine together', r.structures.length === 9);
 }
+{
+  const { r } = run('[C-]');
+  check('a lone [C-] is an atom short of its octet, not a spectator ion', r.structures.length === 1 && r.holes === 3 && r.radicals === 1, `holes ${r.holes}, radicals ${r.radicals}`);
+  const { node } = run('[O-2].[Mg+2]');
+  check('a lone oxide written 2- is a spectator ion', node.fixed[0] !== null && node.fixed[0].charge === -2);
+}
+
+// writing: what toSmiles writes must read back as the same molecule, radicals and bare atoms
+// included (openchemlib would otherwise add hydrogens: [CH3] came out as C, methane), and a pair cut
+// by the octet ceiling is written as a bond so SF6 does not come back as SF4 with two loose F-
+{
+  const { COMPOUNDS } = await import('../core/compounds.js');
+  const { toSmiles } = await import('../core/smiles.js');
+  const picture = (node, r) => `${formula(node)} | ${r.structures.length} structures, holes ${r.holes}, radicals ${r.radicals}, charges ${JSON.stringify(charges(r).sort())}`;
+  const roundTrip = (name, spec) => {
+    const node = buildNode(spec); const r = enumerate(node);
+    const written = toSmiles(node, r.structures[0]);
+    let back;
+    try { const node2 = buildNode(nodeFromSmiles(written)); back = picture(node2, enumerate(node2)); } catch (e) { back = e.message; }
+    return { ok: back === picture(node, r), written, back };
+  };
+  let failures = [];
+  for (const c of COMPOUNDS) { const t = roundTrip(c.name, nodeFromSmiles(c.smiles)); if (!t.ok) failures.push(`${c.name} -> ${t.written} -> ${t.back}`); }
+  check(`every library compound reads back from what toSmiles writes (${COMPOUNDS.length} compounds)`, !failures.length, failures.join('; '));
+  for (const [s, want] of [['[CH3]', '[CH3]'], ['[O]N=O', '[O]N=O'], ['[OH]', '[OH]'], ['FS(F)(F)(F)(F)F', '[F-][S+2]([F-])(F)(F)(F)F'], ['[C-]', '[C-]']]) {
+    const node = buildNode(nodeFromSmiles(s)); const r = enumerate(node);
+    const written = toSmiles(node, r.structures[0]);
+    check(`toSmiles writes ${s} as ${want}`, written === want, written);
+  }
+}
 
 console.log(bad ? `${bad} problem(s)` : 'all SMILES checks pass');
 process.exit(bad ? 1 : 0);

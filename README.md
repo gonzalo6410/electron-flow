@@ -3,16 +3,27 @@ Electron Flow
 A rules-based 3D tool for building and viewing molecules, resonance and electron movement. Design decisions live in the project doc 00 DESIGN; this file only says how the code is laid out.
 
 core/      chemistry, no dependence on any renderer
-  elements.js   valence electrons, octet ceiling, radii, colours
+  elements.js   valence electrons, octet ceiling, radii (covalent and ionic), colours
   lewis.js      Lewis structure enumeration, filters, equal weights, averages, transition hybrids
-  geometry.js   electron groups, template shapes, placement, spring relaxation, lone pair directions
+  geometry.js   electron groups, template shapes, placement, spring relaxation, where loose ions sit
   cases.js      known-answer cases and runCase (transition hybrids live here)
   symmetry.js   symmetries of the skeleton, families of equivalent structures
   pi.js         where pi bonds and lone pairs point
-  smiles.js     molecules from SMILES (openchemlib reads the text; the engine redoes the chemistry)
+  vectors.js    the vector arithmetic shared by geometry.js and pi.js
+  smiles.js     molecules from SMILES (openchemlib reads the text; the engine redoes the chemistry) and back
+  edit.js       editing operations on a molecule (add, remove, bond, charge, fill with hydrogens)
   compounds.js  named compounds for the picker, as SMILES with counter-ions
-test/      node test/run.js (known answers), families.js, pi.js, compounds.js (timings), geometry.js, extra.js, gradient.js (exact forces against finite differences), shapes.js (known-answer shapes), rules-lab.js
-web/       index.html, app.js (three.js viewer), vendor/ (three.js and openchemlib shipped with the page)
+  moves.js      curved arrows applied to a structure: resonance, a move to a new node, or a refusal with the
+                reason; the node after a move; the transition hybrid at a run of mixes for the film
+  reactions.js  reaction scenes (reagents placed together) with their textbook arrows, and piece formulas
+test/      node test/run.js (known answers), families.js, pi.js, compounds.js (timings), geometry.js, extra.js,
+           gradient.js (exact forces against finite differences), shapes.js (known-answer shapes), smiles.js
+           (reading and writing SMILES), edit.js (editing operations), rdkit-agreed.js (138 recorded answers;
+           rdkit-dump.js and rdkit-compare.py made them), rules-lab.js (candidate rules, prints only),
+           moves.js (arrows on the basic mechanisms, refusals, hybrids), reactions.js (every scene's arrows
+           give the textbook products)
+web/       index.html, app.js (three.js viewer, the film of a move), edit.js (editing on the page), arrows.js
+           (drawing curved arrows with the pointer), vendor/ (three.js and openchemlib shipped with the page)
 build.sh   assembles dist/ (web + core) for publishing
 
 Run tests from this folder: node test/run.js
