@@ -1,3 +1,4 @@
+// Electron Flow. Copyright (c) 2026 Gonzalo Fernandez de la Mora. All rights reserved (see LICENSE).
 // Named compounds for the picker, as SMILES. Ions carry their counter-ions (ledger item 15).
 // The engine recomputes every bond order and charge; the SMILES only says which atoms are joined.
 

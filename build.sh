@@ -1,4 +1,5 @@
 #!/bin/sh
+# Electron Flow. Copyright (c) 2026 Gonzalo Fernandez de la Mora. All rights reserved (see LICENSE).
 # Assemble the publishable page in dist/: the web page plus the chemistry core it imports.
 set -e
 cd "$(dirname "$0")"

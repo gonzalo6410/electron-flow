@@ -1,3 +1,4 @@
+# Electron Flow. Copyright (c) 2026 Gonzalo Fernandez de la Mora. All rights reserved (see LICENSE).
 """Drive the Electron Flow page with playwright and take screenshots.
 
 Usage: python3 -I drive.py SCRIPT OUT_PREFIX

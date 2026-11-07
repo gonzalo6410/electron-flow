@@ -1,3 +1,4 @@
+// Electron Flow. Copyright (c) 2026 Gonzalo Fernandez de la Mora. All rights reserved (see LICENSE).
 // node test/names.js   the name search (core/names.js) on the shipped index (web/names.json.gz):
 // what a few typed names find first, the counter-ions a bare ion gets, the skeleton key (the same for
 // every way of writing a molecule and for every structure of it), and naming the products of a move.

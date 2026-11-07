@@ -1,3 +1,4 @@
+// Electron Flow. Copyright (c) 2026 Gonzalo Fernandez de la Mora. All rights reserved (see LICENSE).
 // Editing a molecule: pure operations on a spec { atoms: [{el, ion?}], adj: [[i, j]], charge }.
 // Every operation returns a new spec (and, where atoms are added, a suggested position for each new
 // atom so the geometry can start near its parent). The engine then recomputes everything else:

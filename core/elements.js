@@ -1,3 +1,4 @@
+// Electron Flow. Copyright (c) 2026 Gonzalo Fernandez de la Mora. All rights reserved (see LICENSE).
 // Element table for the Lewis engine.
 // valence: electrons the neutral atom brings to the pool.
 // ceiling: most electrons the atom may count (bonds count two each, lone electrons one each).

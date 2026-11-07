@@ -1,3 +1,4 @@
+// Electron Flow. Copyright (c) 2026 Gonzalo Fernandez de la Mora. All rights reserved (see LICENSE).
 // node test/moves.js   curved arrows on a structure: resonance, moves to a new node, refusals,
 // and the transition hybrid, on the basic mechanisms (ledger items 5, 11, 12, 15)
 import { buildNode, enumerate } from '../core/lewis.js';

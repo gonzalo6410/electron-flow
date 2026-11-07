@@ -1,3 +1,4 @@
+// Electron Flow. Copyright (c) 2026 Gonzalo Fernandez de la Mora. All rights reserved (see LICENSE).
 // Molecules from SMILES, using openchemlib (BSD-3) only to read the text: which atoms, which atoms are
 // joined, the overall charge. Bond orders, lone pairs and formal charges are recomputed by our own
 // engine (core/lewis.js), so what the SMILES says about those is ignored. Isotope marks and stereo

@@ -1,3 +1,10 @@
+// Electron Flow. Copyright (c) 2026 Gonzalo Fernandez de la Mora. All rights reserved (see LICENSE).
+// Whose this is: kept with the engine wherever it goes, and shown on the page.
+export const ENGINE = Object.freeze({
+  name: 'Electron Flow',
+  author: 'Gonzalo Fernandez de la Mora',
+  notice: 'Electron Flow. Copyright (c) 2026 Gonzalo Fernandez de la Mora. All rights reserved.',
+});
 // Lewis engine. Ledger items 7, 8, 13, 23, 24.
 //
 // A "node" is a set of atoms with an adjacency list (which pairs of atoms may share electrons)

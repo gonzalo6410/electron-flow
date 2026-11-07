@@ -1,0 +1,15 @@
+Electron Flow
+Copyright (c) 2026 Gonzalo Fernandez de la Mora. All rights reserved.
+
+This software (its source code, its rules, its pages and its documentation) belongs to Gonzalo
+Fernandez de la Mora. No part of it may be copied, changed, published, distributed, sold, or used
+to make another work without his written permission. Being given access to the code or the page
+grants no such permission.
+
+Parts that are not his keep their own licenses:
+- web/vendor/three.module.js, web/vendor/OrbitControls.js: three.js, MIT License,
+  Copyright (c) 2010-2024 three.js authors.
+- web/vendor/openchemlib.js (and the openchemlib package): OpenChemLib for JavaScript,
+  BSD 3-Clause License, Copyright (c) 2015-2017 cheminfo.
+- web/names.json.gz: names and SMILES taken from the compound lists of the chemicals Python
+  package (MIT License, Caleb Bell), which take them from PubChem (public domain).

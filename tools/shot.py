@@ -1,3 +1,4 @@
+# Electron Flow. Copyright (c) 2026 Gonzalo Fernandez de la Mora. All rights reserved (see LICENSE).
 import asyncio, sys
 from playwright.async_api import async_playwright
 async def main():

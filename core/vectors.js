@@ -1,3 +1,4 @@
+// Electron Flow. Copyright (c) 2026 Gonzalo Fernandez de la Mora. All rights reserved (see LICENSE).
 // Small helpers for vectors written as arrays of three numbers, shared by the geometry and the
 // pi-frame rules. norm of a vector too short to have a direction is the zero vector.
 

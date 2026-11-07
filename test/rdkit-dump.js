@@ -1,3 +1,4 @@
+// Electron Flow. Copyright (c) 2026 Gonzalo Fernandez de la Mora. All rights reserved (see LICENSE).
 // node test/rdkit-dump.js   prints, as JSON, what the engine finds for every named compound and for
 // a set of textbook resonance cases, so test/rdkit-compare.py can hold it against RDKit. Each
 // structure is given as its atoms (element, formal charge, lone electrons) and its bonds with orders;

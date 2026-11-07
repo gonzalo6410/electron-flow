@@ -1,3 +1,4 @@
+// Electron Flow. Copyright (c) 2026 Gonzalo Fernandez de la Mora. All rights reserved (see LICENSE).
 // node test/edit.js   builds molecules by editing operations and checks the engine's answer
 import { emptySpec, addAtom, removeAtom, toggleBond, setCharge, fillHydrogens, placeNear } from '../core/edit.js';
 import { buildNode, enumerate } from '../core/lewis.js';

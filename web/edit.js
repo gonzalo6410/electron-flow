@@ -1,3 +1,4 @@
+// Electron Flow. Copyright (c) 2026 Gonzalo Fernandez de la Mora. All rights reserved (see LICENSE).
 // Editing on the page: click an atom to select it, press an element key to add a bonded atom,
 // Delete to remove it, shift-click another atom to bond or unbond, plus and minus for the charge.
 // The engine recomputes the structure after every change; this file never sets a bond order.

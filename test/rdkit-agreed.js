@@ -1,3 +1,4 @@
+// Electron Flow. Copyright (c) 2026 Gonzalo Fernandez de la Mora. All rights reserved (see LICENSE).
 // node test/rdkit-agreed.js   known answers for every named compound and the textbook cases of
 // test/rdkit-dump.js, recorded on 6 Nov 2026 after holding the engine against RDKit's
 // ResonanceMolSupplier (test/rdkit-compare.py) and reading every difference. Each row: name, SMILES,

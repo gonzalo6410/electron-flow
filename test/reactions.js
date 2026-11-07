@@ -1,3 +1,4 @@
+// Electron Flow. Copyright (c) 2026 Gonzalo Fernandez de la Mora. All rights reserved (see LICENSE).
 // node test/reactions.js   every reaction scene: its textbook arrows make a move, and the products
 // are what the textbook says (by formula and charge)
 import { buildNode, enumerate } from '../core/lewis.js';

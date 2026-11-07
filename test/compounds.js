@@ -1,3 +1,4 @@
+// Electron Flow. Copyright (c) 2026 Gonzalo Fernandez de la Mora. All rights reserved (see LICENSE).
 // node test/compounds.js   every named compound parses, enumerates and relaxes; prints a one-line summary
 // with the time of the whole run and of the geometry relaxation alone, then the slowest relaxation.
 import { COMPOUNDS } from '../core/compounds.js';

@@ -1,3 +1,4 @@
+// Electron Flow. Copyright (c) 2026 Gonzalo Fernandez de la Mora. All rights reserved (see LICENSE).
 // node test/rings.js   the ring rule (core/lewis.js, 7 Nov 2026): two neighbouring ring atoms may share
 // one bond in the plane of a small ring (benzyne's third bond); an atom with two pi parts and no such
 // partner is dropped (pyridine's C=N(+)=C; a phenyl anion whose ring would take its lone pair's place)

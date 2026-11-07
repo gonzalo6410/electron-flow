@@ -1,3 +1,4 @@
+// Electron Flow. Copyright (c) 2026 Gonzalo Fernandez de la Mora. All rights reserved (see LICENSE).
 // Rule-based 3D geometry (ledger item 22). Nothing stored per molecule.
 //
 // 1. Each atom's electron groups = bonded neighbours (average bond order above zero, ionic partners

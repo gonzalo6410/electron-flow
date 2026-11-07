@@ -1,3 +1,4 @@
+// Electron Flow. Copyright (c) 2026 Gonzalo Fernandez de la Mora. All rights reserved (see LICENSE).
 // node test/shapes.js   known-answer checks on the relaxed shapes: the hypervalent and odd cases,
 // the angle rules (lone pairs, ring sizes) and the short polar single bonds.
 import { nodeFromSmiles } from '../core/smiles.js';

@@ -1,10 +1,11 @@
+// Electron Flow. Copyright (c) 2026 Gonzalo Fernandez de la Mora. All rights reserved (see LICENSE).
 // Electron Flow viewer: one Lewis structure drawn in 3D. Renders what the core computes; nothing
 // chemical is decided here. Ledger items 13, 14, 24, 34.
 import * as THREE from 'three';
 import { OrbitControls } from './vendor/OrbitControls.js';
 import { CASES, runCase } from './core/cases.js';
 import { nodeFromSmiles, toSmiles } from './core/smiles.js';
-import { buildNode, enumerate } from './core/lewis.js';
+import { buildNode, enumerate, ENGINE } from './core/lewis.js';
 import { relax } from './core/geometry.js';
 import { piFrame } from './core/pi.js';
 import { structureFamilies } from './core/symmetry.js';
@@ -1438,7 +1439,10 @@ onScreen('sulfur hexafluoride');
 requestAnimationFrame(animate);
 
 // a handle for scripted tests, so a script can find an atom on the screen and click it
+document.getElementById('owner').textContent = ENGINE.notice;
+
 window.electronFlow = {
+  engine: ENGINE,
   THREE, camera, canvas: renderer.domElement,
   positions: () => (current ? current.geo.pos : []),
   pairs: () => tracked.filter(t => t.kind === 'pair').map(t => ({ index: t.index, pos: t.sprite.position.toArray() })),

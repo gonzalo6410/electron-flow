@@ -1,3 +1,4 @@
+// Electron Flow. Copyright (c) 2026 Gonzalo Fernandez de la Mora. All rights reserved (see LICENSE).
 // Curved arrows on the page: drag from a pair of dots or from a bond to an atom or to a bond, and a
 // curved arrow is drawn. Arrows wait until Enter (or the button) makes the move; Escape clears them;
 // a click on an arrow removes it. What the arrows do is decided in core/moves.js; this file only

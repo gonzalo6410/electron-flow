@@ -1,3 +1,4 @@
+// Electron Flow. Copyright (c) 2026 Gonzalo Fernandez de la Mora. All rights reserved (see LICENSE).
 // node test/smiles.js   reading SMILES: aromatic rings with heteroatoms, hydrogens in brackets, charges,
 // isotopes (dropped), stereo marks (dropped), several pieces, bad strings (a plain error, not a
 // different molecule), elements not in the table; and that pieces written apart keep their own

@@ -1,3 +1,4 @@
+// Electron Flow. Copyright (c) 2026 Gonzalo Fernandez de la Mora. All rights reserved (see LICENSE).
 // node test/pi.js   checks pi normals and lone pair placement on a few molecules
 import { buildNode, enumerate } from '../core/lewis.js';
 import { relax } from '../core/geometry.js';

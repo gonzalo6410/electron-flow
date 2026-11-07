@@ -1,3 +1,4 @@
+// Electron Flow. Copyright (c) 2026 Gonzalo Fernandez de la Mora. All rights reserved (see LICENSE).
 import { buildNode, enumerate } from '../core/lewis.js';
 import { relax, geometryReport } from '../core/geometry.js';
 const cases = {

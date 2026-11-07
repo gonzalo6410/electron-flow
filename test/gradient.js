@@ -1,3 +1,4 @@
+// Electron Flow. Copyright (c) 2026 Gonzalo Fernandez de la Mora. All rights reserved (see LICENSE).
 // node test/gradient.js   the exact derivative of the spring energy must agree with finite differences
 // on several molecules, at the rough starting positions (where every term is pulling) and at a
 // stretched copy of them. Also checks that the relaxed energy is the same whether the energy is

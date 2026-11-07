@@ -1,3 +1,4 @@
+// Electron Flow. Copyright (c) 2026 Gonzalo Fernandez de la Mora. All rights reserved (see LICENSE).
 // Build the name search index (web/names.json.gz) from the compound lists of the `chemicals` Python
 // package (MIT; Caleb Bell), whose names, synonyms and SMILES come from PubChem (public domain).
 //

@@ -1,3 +1,4 @@
+// Electron Flow. Copyright (c) 2026 Gonzalo Fernandez de la Mora. All rights reserved (see LICENSE).
 // Names. The search box takes a name (common or systematic) or a SMILES; the names come from PubChem
 // through the index that tools/build-names.mjs writes (web/names.json.gz). This file holds what does
 // not depend on the page: comparing names, searching the index, the counter-ions a bare ion gets, and

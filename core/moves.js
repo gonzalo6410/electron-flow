@@ -1,3 +1,4 @@
+// Electron Flow. Copyright (c) 2026 Gonzalo Fernandez de la Mora. All rights reserved (see LICENSE).
 // Moves: curved arrows drawn on one Lewis structure of a node, and what they do. Ledger items 11,
 // 12, 15, 16.
 //

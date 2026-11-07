@@ -1,3 +1,4 @@
+// Electron Flow. Copyright (c) 2026 Gonzalo Fernandez de la Mora. All rights reserved (see LICENSE).
 // Where the pi bonds and the lone pairs point. Rules, nothing stored per molecule.
 //
 // Pi bonds. A bond of order above 1 has a pi part whose p orbitals point along a unit vector n at

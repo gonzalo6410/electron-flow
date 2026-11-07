@@ -1,3 +1,4 @@
+// Electron Flow. Copyright (c) 2026 Gonzalo Fernandez de la Mora. All rights reserved (see LICENSE).
 // node test/geometry.js   prints rule-based geometry for every case
 import { relax, geometryReport } from '../core/geometry.js';
 import { CASES, runCase } from '../core/cases.js';

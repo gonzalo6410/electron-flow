@@ -1,3 +1,4 @@
+// Electron Flow. Copyright (c) 2026 Gonzalo Fernandez de la Mora. All rights reserved (see LICENSE).
 // node test/run.js [--all]   (run from the electron-flow folder)
 import { describe } from '../core/lewis.js';
 import { CASES, runCase } from '../core/cases.js';

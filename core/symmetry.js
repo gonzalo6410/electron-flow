@@ -1,3 +1,4 @@
+// Electron Flow. Copyright (c) 2026 Gonzalo Fernandez de la Mora. All rights reserved (see LICENSE).
 // Symmetry of the sigma skeleton, and the grouping of contributing structures into families of
 // equivalent structures (the fifteen of SF6 are one family; formamide's two structures are two).
 // A relabelling of atoms that keeps every element and every adjacency is a symmetry of the skeleton.

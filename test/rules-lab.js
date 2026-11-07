@@ -1,3 +1,4 @@
+// Electron Flow. Copyright (c) 2026 Gonzalo Fernandez de la Mora. All rights reserved (see LICENSE).
 // Candidate filters tried after the engine's own two rules (fewest holes, fewest cut pairs).
 // Prints how many structures survive each candidate, so a rule can be judged on known molecules.
 // node test/rules-lab.js

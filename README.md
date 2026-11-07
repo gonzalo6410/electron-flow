@@ -1,5 +1,7 @@
 Electron Flow
 
+Copyright (c) 2026 Gonzalo Fernandez de la Mora. All rights reserved; see LICENSE.
+
 A rules-based 3D tool for building and viewing molecules, resonance and electron movement. Design decisions live in the project doc 00 DESIGN; this file only says how the code is laid out.
 
 core/      chemistry, no dependence on any renderer

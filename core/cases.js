@@ -1,3 +1,4 @@
+// Electron Flow. Copyright (c) 2026 Gonzalo Fernandez de la Mora. All rights reserved (see LICENSE).
 import { buildNode, enumerate, hybrid } from './lewis.js';
 
 // Known-answer cases from the ledger (item 7 and item 28). Expected values are his statements

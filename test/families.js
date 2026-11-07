@@ -1,3 +1,4 @@
+// Electron Flow. Copyright (c) 2026 Gonzalo Fernandez de la Mora. All rights reserved (see LICENSE).
 // node test/families.js   families of equivalent structures for every case, and for molecules
 // chosen to trip the grouping: two identical substituents on a ring (o-, m- and p-xylene differ),
 // chains with methyl groups (the hydrogen folding), spectator ions beside a symmetric anion, and

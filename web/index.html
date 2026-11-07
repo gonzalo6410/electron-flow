@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<!-- Electron Flow. Copyright (c) 2026 Gonzalo Fernandez de la Mora. All rights reserved (see LICENSE). -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -47,6 +48,7 @@
   #status { margin-top: 12px; color: var(--mute); height: calc(4 * 1.4em); overflow: hidden; }
   #status div { height: 1.4em; white-space: nowrap; overflow: hidden; }
   #status b { color: var(--ink); font-weight: 500; }
+  .owner { margin-top: 10px; font-size: 11px; color: var(--mute); }
   .note { margin-top: 8px; font-size: 12px; color: var(--mute); min-height: 2.8em; }
   .row { display: flex; gap: 6px; margin-top: 6px; }
   button.small { font: inherit; font-size: 12px; color: var(--ink); background: #fff; border: 1px solid #ccc; border-radius: 4px; padding: 4px 10px; cursor: pointer; }
@@ -101,6 +103,7 @@
       <summary>rules</summary>
       <p>The octet is never exceeded. Contributing structures are the ones with the fewest octet holes. A sigma bond breaks only where the octet forces it. In a small ring two neighbouring atoms may share one extra bond in the ring's plane, as in benzyne; a ring allene, which has no such pair, is drawn anyway. Electrons in the ring's plane stay where they are from one structure to the next. No formal charge beyond plus or minus one unless every structure has one. All contributing structures weigh the same. Structures that are the same picture with atoms renamed form one family and alternate on their own; different structures are stepped through with the arrows. Shapes follow the electron groups around each atom; bond lengths and angles are relaxed as springs.</p>
     </details>
+    <p id="owner" class="owner"></p>
   </div>
   <div id="view"><div id="hint">drag to turn · wheel to zoom · right-drag to move · arrow keys step the structures · space pauses · drag from dots or a bond to draw an arrow · Enter makes the move</div><div id="tip"></div></div>
   <script type="module" src="./app.js"></script>

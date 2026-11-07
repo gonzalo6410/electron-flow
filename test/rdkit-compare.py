@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Electron Flow. Copyright (c) 2026 Gonzalo Fernandez de la Mora. All rights reserved (see LICENSE).
 # python3 test/rdkit-compare.py [names...]   (run from the electron-flow folder; needs rdkit:
 # pip install rdkit --break-system-packages)
 #

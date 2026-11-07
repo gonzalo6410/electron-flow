@@ -1,3 +1,4 @@
+// Electron Flow. Copyright (c) 2026 Gonzalo Fernandez de la Mora. All rights reserved (see LICENSE).
 // node test/film.js   the shapes of the film of every reaction scene (core/moves.js, filmSteps): the
 // substrate does not swing about (the first round of the moves review saw chloromethane turn about 90
 // degrees at the start), no atom jumps between two steps, and the SN2 film keeps O, C and Cl on a line.

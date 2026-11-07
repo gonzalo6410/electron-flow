@@ -1,3 +1,4 @@
+# Electron Flow. Copyright (c) 2026 Gonzalo Fernandez de la Mora. All rights reserved (see LICENSE).
 """Screenshot every compound of the test list (core/compounds.js, typed into the search box as SMILES) and every
 reaction scene into contact sheets.
 Usage: python3 -I all.py OUTDIR

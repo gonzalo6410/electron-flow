@@ -1,3 +1,4 @@
+// Electron Flow. Copyright (c) 2026 Gonzalo Fernandez de la Mora. All rights reserved (see LICENSE).
 // Reaction scenes: the reagents of a mechanism step placed together, with the arrows that make the
 // step, for the picker and for the tests. The arrows name atoms by their place in the SMILES:
 // 'a2' is the third heavy atom written, 'h2' a hydrogen on it. Ledger item 5.
