@@ -44,10 +44,19 @@ export function attachArrows(api) {
     const candidates = [];
     if (bonds) for (const m of api.bondMeshes()) candidates.push(m);
     if (atoms) for (const m of api.atomMeshes()) candidates.push(m);
-    const hit = raycaster.intersectObjects(candidates, false)[0];
-    if (!hit) return null;
-    if (hit.object.userData.atom !== undefined) return { kind: 'atom', index: hit.object.userData.atom };
-    return { kind: 'bond', edge: hit.object.userData.edge };
+    const hits = raycaster.intersectObjects(candidates, false);
+    if (!hits.length) return null;
+    const atomOf = h => h.object.userData.atom;
+    // a bond seen end on lies in front of its own atom: with the pointer on that atom, the atom is
+    // meant (a drop on the O of an O-H bond pointed at the O-C bond in front of it; moves review)
+    const first = hits[0];
+    if (atomOf(first) === undefined) {
+      const ends = api.getCurrent().r.edges[first.object.userData.edge];
+      const own = hits.find(h => atomOf(h) !== undefined && ends.includes(atomOf(h)));
+      if (own) return { kind: 'atom', index: atomOf(own) };
+      return { kind: 'bond', edge: first.object.userData.edge };
+    }
+    return { kind: 'atom', index: atomOf(first) };
   }
 
   // ---------- points in space ----------
@@ -122,7 +131,8 @@ export function attachArrows(api) {
     if ('pair' in from) {
       const i = from.pair;
       if (hit.kind === 'atom') return hit.index === i ? null : { bond: [i, hit.index] };
-      if (hit.kind === 'bond') { const [k, l] = edges[hit.edge]; return k === i || l === i ? { bond: [k, l] } : null; }
+      // a bond away from the pair is kept as the head, so that letting go there says why it cannot be
+      if (hit.kind === 'bond') { const [k, l] = edges[hit.edge]; return { bond: [k, l] }; }
       return null;
     }
     const [i, j] = from.bond;

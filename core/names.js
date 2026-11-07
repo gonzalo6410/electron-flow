@@ -69,8 +69,8 @@ export function makeIndex(data) {
 
 // Up to `limit` entries for what was typed: an entry whose own name (the one shown) equals it, then
 // one with another name equal to it ("acetate" is the ion before it is a synonym of acetic acid),
-// then own names starting with it, other names starting with it, and names containing it (from three
-// letters on); within each, common chemicals first, then the shorter name, then the lower PubChem
+// then own names starting with it, other names starting with it, and names with a word starting with
+// it (from three letters on); within each, common chemicals first, then the shorter name, then the lower PubChem
 // number. Each hit says which name matched.
 export function search(index, text, limit = 8) {
   const q = normName(text);
@@ -88,8 +88,15 @@ export function search(index, text, limit = 8) {
     const x = flat[k];
     offer(x, x.n === q ? (own(x) ? 0 : 1) : (own(x) ? 2 : 3));
   }
+  // inside a name, only from the start of one of its words ("butanol" finds tert-butanol; "thf" does
+  // not find moth flakes)
+  const atWord = x => {
+    const words = x.name.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+    for (let w = 1; w < words.length; w++) if (words.slice(w).join('').startsWith(q)) return true;
+    return false;
+  };
   if (q.length >= 3 && best.size < limit * 4) {
-    for (const x of flat) if (!x.n.startsWith(q) && x.n.includes(q)) offer(x, 4);
+    for (const x of flat) if (!x.n.startsWith(q) && x.n.includes(q) && atWord(x)) offer(x, 4);
   }
   return [...best.entries()]
     .sort(([ea, a], [eb, b]) => a.tier - b.tier || ea.tier - eb.tier || a.n.length - b.n.length || ea.cid - eb.cid)

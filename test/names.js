@@ -33,6 +33,11 @@ const first = [
   ['sulfur hexafluoride', 'FS(F)(F)(F)(F)F'],
   ['acetate', 'CC(=O)[O-].[Na+]'],
   ['sodium acetate', 'CC(=O)[O-].[Na+]'],
+  ['water', 'O'],
+  ['THF', 'C1CCOC1'],
+  ['LDA', 'CC(C)[N-]C(C)C.[Li+]'],
+  ['sodium hydroxide', '[OH-].[Na+]'],
+  ['butanol', 'CCCCO'],
 ];
 const keyOf = smi => skeletonKey(buildNode(nodeFromSmiles(balanceSmiles(smi).smiles)));
 for (const [typed, smi] of first) {
@@ -48,6 +53,16 @@ for (const [typed, smi] of first) {
   search(index, 'chloro', 8);
   const ms = performance.now() - t;
   say(ms < 200, `a short common fragment ("chloro") searches the whole list in ${ms.toFixed(0)} ms`);
+}
+{
+  // the name shown: a salt by its own name, water as water (not as heavy water, which the engine,
+  // ignoring isotopes, cannot tell apart from it)
+  for (const [typed, want] of [['sodium hydroxide', 'sodium hydroxide'], ['water', 'water'], ['sodium chloride', 'sodium chloride']]) {
+    const top = search(index, typed, 1)[0];
+    say(top && top.entry.name === want, `"${typed}" is shown as ${top ? top.entry.name : 'nothing'}`);
+  }
+  const moth = search(index, 'thf', 8).some(h => /moth/.test(h.matched));
+  say(!moth, '"thf" does not find moth flakes (inside a name, only from the start of a word)');
 }
 {
   const hits = search(index, 'ferrocene', 8);

@@ -473,15 +473,23 @@ function showEmpty() {
   if (editor) editor.onLoaded();
 }
 
-// true when some atom sits outside the picture
-function outOfView(geo) {
+// true when some atom sits outside the picture; given the atoms, when some atom with its dots
+// around it (its radius and a little more) would be cut by the edge (the bromide of SN1 step 1 left
+// its dots below the picture with its centre inside)
+function outOfView(geo, node = null) {
   camera.updateMatrixWorld();
   const v = new THREE.Vector3();
-  return geo.pos.some(p => { v.set(...p).project(camera); return Math.abs(v.x) > 0.92 || Math.abs(v.y) > 0.92 || v.z > 1; });
+  const beyond = (q, edge) => { v.copy(q).project(camera); return Math.abs(v.x) > edge || Math.abs(v.y) > edge || v.z > 1; };
+  if (!node) return geo.pos.some(p => beyond(new THREE.Vector3(...p), 0.92));
+  camera.matrixWorld.extractBasis(camRight, camUp, camBack);
+  return geo.pos.some((p, i) => {
+    const c = new THREE.Vector3(...p), reach = atomRadius(node.atoms[i].el) + 0.35;
+    return [camRight, camUp].some(d => beyond(c.clone().addScaledVector(d, reach), 0.98) || beyond(c.clone().addScaledVector(d, -reach), 0.98));
+  });
 }
 
-function show(spec, node, r, start, animate) {
-  const geo = relax(node, r, start ? { start } : {});
+// the main structure and the families in the order they are shown, for a molecule just loaded
+function mainAndFamilies(node, r) {
   // the main structure: least total formal charge; on a tie, the one whose loose ions sit by atoms of
   // the opposite charge (a sodium of carbonate by an O-, not by the C=O); then the one with its
   // negative charges on the more electronegative atoms (the O- of pyridine N-oxide rather than a ring
@@ -500,6 +508,12 @@ function show(spec, node, r, start, animate) {
   r.structures.forEach((st, q) => { if (before(st, r.structures[main]) < 0) main = q; });
   const families = structureFamilies(node, r).families
     .sort((a, b) => before(r.structures[a[0]], r.structures[b[0]]) || (b.length - a.length) || (a[0] - b[0]));
+  return { main, families };
+}
+
+function show(spec, node, r, start, animate) {
+  const geo = relax(node, r, start ? { start } : {});
+  const { main, families } = mainAndFamilies(node, r);
   current = { spec, node, r, geo, families, main };
   familyIdx = 0; memberIdx = 0; fade = null;
   if (arrows) arrows.dropIfStale();
@@ -585,23 +599,27 @@ function buildStructure() {
       m.userData.edge = k; m.userData.pick = true; m.userData.baseOpacity = 0;
       sub.add(m);
     });
-    const changing = movie && r.transitionEdges && r.transitionEdges[k] && !node.fixed[i] && !node.fixed[j];
+    // while a move plays: a bond being made or broken is drawn as faint as it is weak and not at all
+    // once gone; an ion's old tie fades out as its new one fades in (core/moves.js, filmRoles)
+    const role = movie ? movie.roles[k] : null;
+    const changing = !!role && role.changing;
+    if (role && (role.tieBefore || role.tieAfter)) {
+      const f = (role.tieBefore ? 1 - movieMix() : 0) + (role.tieAfter ? movieMix() : 0);
+      if (f > 0.02) {
+        part(`tie:${k}:${f.toFixed(2)}`, sub => {
+          const mat = f < 1 ? solid(0xc8c8c8) : ionMat;
+          if (f < 1) mat.opacity = f;
+          dashed(a2, b2, 0.035, mat, sub);
+          sub.traverse(m => { if (m.isMesh) m.userData.baseOpacity = f; });
+          tag(sub, k, `${pair}: an ion kept nearby, no bond`);
+        });
+      }
+      if (o <= 1e-9) return;
+    }
     if (o <= 1e-9 && changing) return; // a bond already broken, or not yet made: nothing to draw
     if (o <= 1e-9) {
       part(`edge:${k}:0`, sub => {
-        if (node.fixed[i] || node.fixed[j]) {
-          // while a move plays, an ion's old tie fades out as its new one fades in
-          let mat = ionMat;
-          if (movie && r.transitionEdges && r.transitionEdges[k]) {
-            const has = res => res.edges.some(e => e[0] === i && e[1] === j);
-            const f = has(r.after) ? movieMix() : 1 - movieMix();
-            mat = solid(0xc8c8c8); mat.opacity = f;
-            sub.userData.baseOpacity = f;
-          }
-          dashed(a2, b2, 0.035, mat, sub);
-          sub.traverse(o => { if (o.isMesh && mat !== ionMat) o.userData.baseOpacity = mat.opacity; });
-          tag(sub, k, `${pair}: an ion kept nearby, no bond`);
-        }
+        if (node.fixed[i] || node.fixed[j]) { dashed(a2, b2, 0.035, ionMat, sub); tag(sub, k, `${pair}: an ion kept nearby, no bond`); }
         else { hashed(a2, b2, HASH, ghostMat, sub); tag(sub, k, `${pair}: no bond in this structure`); }
       });
       return;
@@ -902,13 +920,14 @@ function atomNote(i) {
   const el = node.atoms[i].el;
   const q = st.charge[i], lone = st.lone[i];
   const charge = Math.abs(q) < 1e-9 ? 'no charge' : `charge ${chargeMark(q)}`;
-  if (node.fixed[i]) return `<b>${el}</b> ${charge}<br>a loose ion, no bonds${lone ? `, ${lone} lone electrons` : ''}`;
+  const name = `${el} ${i + 1}`;   // the notes about arrows name atoms this way
+  if (node.fixed[i]) return `<b>${name}</b> ${charge}<br>a loose ion, no bonds${lone ? `, ${lone} lone electrons` : ''}`;
   const ceiling = ELEMENTS[el].ceiling;
   const count = st.count[i];
   const num = v => (Math.abs(v - Math.round(v)) < 1e-9 ? String(Math.round(v)) : v.toFixed(2));   // partial during a move
   const octet = count >= ceiling - 1e-9 ? `counts ${num(count)} electrons, full` : `counts ${num(count)} electrons, ${num(ceiling - count)} short`;
   const lones = lone === 0 ? 'no lone electrons' : lone === 1 ? '1 lone electron' : `${num(lone)} lone electrons`;
-  return `<b>${el}</b> ${charge}<br>${octet}, ${lones}`;
+  return `<b>${name}</b> ${charge}<br>${octet}, ${lones}`;
 }
 
 function updateTip() {
@@ -968,14 +987,18 @@ let shownName = '';          // what the box says when it is not being typed in
 let hits = [], hitOn = -1;
 (async () => {
   try {
-    const res = await fetch('./names.json.gz');
+    // names.txt is web/names.json.gz written out as base64 by build.sh (the page host serves no .gz)
+    const res = await fetch('./names.txt');
     if (!res.ok) throw new Error(String(res.status));
-    const bytes = new Uint8Array(await res.arrayBuffer());
-    let text;
-    if (bytes[0] === 0x1f && bytes[1] === 0x8b) {
+    const raw = (await res.text()).trim();
+    let text = raw;
+    if (raw[0] !== '{') {
+      const bin = atob(raw);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
       const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
       text = await new Response(stream).text();
-    } else text = new TextDecoder().decode(bytes);   // the server already unpacked it
+    }
     names = makeIndex(JSON.parse(text));
     namesNote = '';
     if (document.activeElement === searchBox) suggest();
@@ -1177,7 +1200,8 @@ window.addEventListener('keydown', e => {
 function updatePanel() {
   if (movie) {
     const made = movie.out.made.length, broken = movie.out.broken.length;
-    const lines = [movie.pausedAt === null ? '<b>the move</b> is playing (space holds it)' : '<b>the move</b> is held (space goes on)', `${made} bond${made === 1 ? '' : 's'} made, ${broken} broken`, `products: ${movie.products.join(', ')}`];
+    // the products are not named until the film has shown them
+    const lines = [movie.pausedAt === null ? '<b>the move</b> is playing (space holds it)' : '<b>the move</b> is held (space goes on)', `${made} bond${made === 1 ? '' : 's'} made, ${broken} broken`];
     document.getElementById('status').innerHTML = lines.map(l => `<div>${l}</div>`).join('');
     document.getElementById('steps').style.visibility = 'hidden';
     return;
@@ -1186,7 +1210,10 @@ function updatePanel() {
   const n = r.structures.length;
   const stepping = showResonance && families.length > 1;
   document.getElementById('steps').style.visibility = stepping ? 'visible' : 'hidden';
-  const lines = [`<b>${r.pool}</b> valence electrons` + (current.spec && current.spec.charge ? ` · charge <b>${(current.spec.charge > 0 ? '+' : MINUS) + Math.abs(current.spec.charge)}</b>` : ''), `<b>${n}</b> contributing structure${n === 1 ? '' : 's'}`];
+  // the engine shares out the pool; a loose anion keeps its own electrons outside it, and they count
+  // too (a chloride's eight: the SN2 products showed 14 where the reagents showed 22)
+  const own = current.node.fixed.reduce((sum, f) => sum + (f ? f.lone : 0), 0);
+  const lines = [`<b>${r.pool + own}</b> valence electrons` + (current.spec && current.spec.charge ? ` · charge <b>${(current.spec.charge > 0 ? '+' : MINUS) + Math.abs(current.spec.charge)}</b>` : ''), `<b>${n}</b> contributing structure${n === 1 ? '' : 's'}`];
   if (r.transitionEdges) lines.push('before and after, equal weight');
   if (showResonance && n > 1) {
     const size = families[familyIdx].length;
@@ -1316,20 +1343,30 @@ function makeMove(list) {
 // step; at the end the products are loaded as the molecule on screen.
 function playMove(out) {
   const film = filmSteps(current.node, out, current.geo, 21);
-  const { node, steps, endPos } = film;
+  const { node, steps, roles, endPos } = film;
   arrows.clear();
   finishFade();
   const products = pieceFormulas(out.spec, out.after);
-  movie = { node, steps, start: performance.now(), out, products, shown: null, endPos, pausedAt: null };
+  // the film begins on the picture the arrows were drawn on and ends on the picture the products will
+  // show, so nothing jumps when it starts or when the products are loaded (a ring of five structures
+  // turned from one picture to their average the moment the film began; moves review, 7 Nov 2026)
+  const lift = (st, edges) => {
+    const at = new Map(edges.map((e, k) => [`${e[0]}-${e[1]}`, k]));
+    return { ...st, orders: out.hybrid.edges.map(e => { const k = at.get(`${e[0]}-${e[1]}`); return k === undefined ? 0 : st.orders[k]; }) };
+  };
+  const { main, families } = mainAndFamilies(out.after, out.rAfter);
+  const first = lift(shownStructure(), current.r.edges);
+  const last = lift(out.rAfter.structures[showResonance ? families[0][0] : main], out.rAfter.edges);
+  movie = { node, steps, roles, first, last, start: performance.now(), out, products, shown: null, endPos, pausedAt: null };
   // the camera draws back at the start, if it must, so that nothing leaves the picture during the film
   const every = { atoms: steps.flatMap(() => node.atoms) };
   const everyGeo = { pos: steps.flatMap(st => st.geo.pos) };
-  if (outOfView(everyGeo)) moveCamera(frameFor(every, everyGeo, null, { dir: camera.position.clone().sub(controls.target).normalize(), up: camera.up }), true);
+  if (outOfView(everyGeo, every)) moveCamera(frameFor(every, everyGeo, null, { dir: camera.position.clone().sub(controls.target).normalize(), up: camera.up }), true);
   current = { ...current, node, r: steps[0].r, geo: steps[0].geo };
   buildAtoms();
   stepMovie(performance.now());
   updatePanel();
-  arrows.note('the move is playing');
+  arrows.note('watch the bonds, pairs and charges change; hover an atom for its numbers');
 }
 function movieMix() { return movie && movie.shown ? movie.mix : 0; }
 function stepMovie(t) {
@@ -1344,9 +1381,18 @@ function stepMovie(t) {
   const a = movie.steps[k], b = movie.steps[k + 1];
   const pos = a.geo.pos.map((p, i) => p.map((v, q) => v + (b.geo.pos[i][q] - v) * u));
   const mix = a.mix + (b.mix - a.mix) * u;
+  // the drawing: from the picture on screen to the average of the reagents' structures during the
+  // approach, then the weights blend from before to after, then from that average to the picture the
+  // products will show during the settle
   const A = movie.steps[0].r.avg, B = movie.steps[last].r.avg;
-  const blend = (P, Q) => P.map((v, i) => v + (Q[i] - v) * mix);
-  movie.shown = { orders: blend(A.orders, B.orders), lone: blend(A.lone, B.lone), charge: blend(A.charge, B.charge), count: blend(A.count, B.count), cuts: 0, weight: 1 };
+  const [P, Q, w] = f < 0.2 ? [movie.first, A, ease(f / 0.2)] : f < 0.85 ? [A, B, mix] : [B, movie.last, ease((f - 0.85) / 0.15)];
+  const blend = key => P[key].map((v, i) => v + (Q[key][i] - v) * w);
+  const orders = blend('orders'), lone = blend('lone');
+  // the electrons an atom counts, from the pairs and bonds drawn (a leaving bromide counts its eight
+  // all the way, not the nothing a loose ion counts in the engine's books)
+  const count = lone.map(v => v);
+  movie.node.edges.forEach(([i, j], k) => { count[i] += 2 * orders[k]; count[j] += 2 * orders[k]; });
+  movie.shown = { orders, lone, charge: blend('charge'), count, cuts: 0, weight: 1 };
   movie.mix = mix;
   current.r = a.r;
   current.geo = { ...a.geo, pos };

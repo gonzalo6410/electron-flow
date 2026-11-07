@@ -32,6 +32,7 @@
 import { element } from './elements.js';
 import { buildNode, enumerate, hybrid } from './lewis.js';
 import { relax } from './geometry.js';
+import { bestFit } from './vectors.js';
 
 const key = (i, j) => `${Math.min(i, j)}-${Math.max(i, j)}`;
 
@@ -213,6 +214,9 @@ export function specAfter(node, applied) {
   const nonH = i => atoms[i].el !== 'H';
   for (let i = 0; i < n; i++) {
     if (!loose[i]) continue;
+    // a loose ion another loose ion has already tied to keeps that one tie (a sodium chloride is one
+    // tie, not two on top of each other)
+    if (adj.some(([a, b]) => (a === i && loose[b]) || (b === i && loose[a]))) continue;
     const want = atoms[i].written > 0 ? -1 : 1;
     const score = j => (j === i ? -Infinity : Math.sign(atoms[j].written) === want ? Math.abs(atoms[j].written) : -Infinity);
     let partner = -1, best = -Infinity;
@@ -316,6 +320,21 @@ export function describeArrow(node, a) {
   return `${tail} to ${head}`;
 }
 
+// What each pair of the film does, for its shapes and its drawing: `changing` when it is a bond on one
+// side of the move only (made or broken) between two atoms that take bonds; `tieBefore` and `tieAfter`
+// when it ties a loose ion on that side. A bond can become a tie on the same two atoms: the bromide
+// of SN1 step 1 leaves its carbon and is then kept beside it (moves review, 7 Nov 2026: that pair
+// showed a long hashed line as the film ended). `first` and `last` are the hybrid at the two ends.
+export function filmRoles(before, after, first, last) {
+  const has = (nd, [i, j]) => nd.edges.some(e => (e[0] === i && e[1] === j) || (e[0] === j && e[1] === i));
+  const tie = (nd, e) => has(nd, e) && !!(nd.fixed[e[0]] || nd.fixed[e[1]]);
+  return first.edges.map((e, k) => ({
+    changing: !before.els[e[0]].ionic && !before.els[e[1]].ionic && (first.avg.orders[k] > 1e-9) !== (last.avg.orders[k] > 1e-9),
+    tieBefore: tie(before, e),
+    tieAfter: tie(after, e),
+  }));
+}
+
 // The shapes of the film of a move (item 15), from the geometry on screen: the reagents first drift
 // together (the bonds to be made pull a little, the bonds to be broken let go a little) while the
 // biggest molecule is held where it is, so the reagent comes round to the substrate rather than the
@@ -325,16 +344,51 @@ export function describeArrow(node, a) {
 // For the shape only, a bond being made or broken is held between 0.03 and 0.97 inside the blend: at
 // zero its two atoms would no longer be held on one line and the molecule would swing (the first and
 // last frames turned chloromethane 70 degrees; moves review, 6 Nov 2026). During the film a leaving
-// ion is an ordinary atom whose pairs fill up as its bond goes. Returns the film's node, the steps
-// ({ mix, r, geo }, the first being the geometry on screen) and the positions it ends on.
+// ion is an ordinary atom whose pairs fill up as its bond goes.
+// After every step the whole scene is turned and shifted, all of it together, so that the substrate's
+// own atoms (filmCore) sit where they were on screen: that changes no distance or angle, and the
+// substrate stays still while the rest moves round it. The soft hold alone let acetaldehyde turn 50
+// degrees in the approach of the enolate scene and 120 by its end (moves review, 7 Nov 2026).
+// Returns the film's node, the steps ({ mix, r, geo }, the first being the geometry on screen), the
+// roles of its pairs (filmRoles) and the positions it ends on.
 export function filmSteps(before, out, startGeo, count = 21) {
   const frames = transitionFrames(before, out.after, count);
   const node = { ...before, edges: out.hybrid.edges, fixed: before.fixed.map((f, i) => (before.els[i].ionic ? f : null)) };
   const r0 = frames[0].r;
+  const roles = filmRoles(before, out.after, r0, frames[frames.length - 1].r);
   const bondEdge = k => !before.els[r0.edges[k][0]].ionic && !before.els[r0.edges[k][1]].ionic;
-  const shapeOrders = (fr, f) => ({ ...fr, avg: { ...fr.avg, orders: fr.avg.orders.map((o, k) => (fr.transitionEdges[k] && bondEdge(k) ? f(o) : o)) } });
+  const held = k => (r0.transitionEdges[k] && bondEdge(k)) || roles[k].changing;
+  // On an atom at one end of a bond being made, a pair that goes is counted, for the shape only, as
+  // already a little gone, as much as that bond is held; and on an atom at one end of a bond being
+  // broken, a pair that comes as not quite there yet. Else an oxygen about to attack counts its three
+  // pairs and the held bond as five groups at the start and four a frame later, and its hydrogen
+  // jumps (moves review, 7 Nov 2026). A bond becoming a tie on the same two atoms is a bond being
+  // broken here as well.
+  const A = r0.avg.lone, B = frames[frames.length - 1].r.avg.lone;
+  const ends = made => new Set(r0.edges.flatMap((e, k) => (held(k) && (r0.avg.orders[k] > 1e-9) !== made ? e : [])));
+  const making = ends(true), breaking = ends(false);
+  const shapeLone = lone => lone.map((v, i) => {
+    if (A[i] - B[i] > 1e-9 && making.has(i)) return Math.min(v, A[i] - 0.06);
+    if (B[i] - A[i] > 1e-9 && breaking.has(i)) return Math.min(v, B[i] - 0.06);
+    return v;
+  });
+  const shapeOrders = (fr, f) => ({
+    ...fr,
+    transitionEdges: fr.transitionEdges.map((t, k) => t || roles[k].changing),
+    avg: { ...fr.avg, orders: fr.avg.orders.map((o, k) => (held(k) ? f(o) : o)), lone: shapeLone(fr.avg.lone) },
+  });
+  // each step is laid onto the one before by the substrate's own atoms (not onto the first: a
+  // substrate that changes its own shape, ethyl bromide going flat as ethylene, fits its first shape
+  // two ways and would flip between them)
+  const core = filmCore(before, out.after);
+  const weights = core.map(i => (before.atoms[i].el === 'H' ? 0.25 : 1));
   let pos = startGeo.pos;
-  const approach = relax(node, shapeOrders(r0, o => (o > 0.5 ? 0.97 : 0.03)), { start: pos, anchor: { atoms: biggestPiece(before), k: 1 } });
+  const still = geo => {
+    if (core.length < 3) return geo;
+    const move = bestFit(core.map(i => geo.pos[i]), core.map(i => pos[i]), weights);
+    return { ...geo, pos: geo.pos.map(move) };
+  };
+  const approach = still(relax(node, shapeOrders(r0, o => (o > 0.5 ? 0.97 : 0.03)), { start: pos, anchor: { atoms: biggestPiece(before), k: 1 } }));
   pos = approach.pos;
   const steps = [{ mix: 0, r: r0, geo: startGeo }, { mix: 0, r: r0, geo: approach }];
   // each frame is also held softly near the one before (a spring of 1 on every atom), so that a
@@ -342,25 +396,43 @@ export function filmSteps(before, out, startGeo, count = 21) {
   // jumping a whole angstrom in one; the products' own shape comes in the settle at the end
   const all = node.atoms.map((_, i) => i);
   for (const f of frames) {
-    const geo = relax(node, shapeOrders(f.r, o => Math.min(0.97, Math.max(o, 0.03))), { start: pos, anchor: { atoms: all, k: 1 } });
+    const geo = still(relax(node, shapeOrders(f.r, o => Math.min(0.97, Math.max(o, 0.03))), { start: pos, anchor: { atoms: all, k: 1 } }));
     pos = geo.pos;
     steps.push({ mix: f.mix, r: f.r, geo });
   }
-  const settled = relax(out.after, out.rAfter, { start: pos });
+  const settled = still(relax(out.after, out.rAfter, { start: pos }));
   steps.push({ mix: 1, r: frames[frames.length - 1].r, geo: settled });
-  return { node, steps, endPos: settled.pos };
+  return { node, steps, roles, endPos: settled.pos };
 }
 
-// the atoms of the molecule with the most atoms (a loose ion counts with its partner); none when
-// there is only one molecule
-export function biggestPiece(node) {
-  const n = node.atoms.length;
+// the molecules of a node, each as a list of its atoms, by its bonds (a loose ion is a molecule of
+// its own, not counted with its partner)
+function pieces(node) {
   const parent = node.atoms.map((_, i) => i);
   const find = i => (parent[i] === i ? i : (parent[i] = find(parent[i])));
   node.edges.forEach(([i, j]) => { if (!node.fixed[i] && !node.fixed[j]) parent[find(i)] = find(j); });
   const groups = new Map();
-  for (let i = 0; i < n; i++) { const r = find(i); if (!groups.has(r)) groups.set(r, []); groups.get(r).push(i); }
-  const all = [...groups.values()];
+  node.atoms.forEach((_, i) => { const r = find(i); if (!groups.has(r)) groups.set(r, []); groups.get(r).push(i); });
+  return [...groups.values()];
+}
+
+// the atoms of the molecule with the most atoms; none when there is only one molecule
+export function biggestPiece(node) {
+  const all = pieces(node);
   if (all.length < 2) return [];
   return all.reduce((a, b) => (b.length > a.length ? b : a));
+}
+
+// The atoms that hold the picture still during a film: those of the biggest molecule before the move
+// (the only one, if there is one) that stay together after it, so a leaving group or a proton that
+// goes is left out: CH3 of chloromethane, the tert-butyl of SN1 step 1.
+export function filmCore(before, after) {
+  const big = pieces(before).reduce((a, b) => (b.length > a.length ? b : a), []);
+  const where = new Map();
+  pieces(after).forEach((p, q) => p.forEach(i => where.set(i, q)));
+  const count = new Map();
+  for (const i of big) count.set(where.get(i), (count.get(where.get(i)) || 0) + 1);
+  let keep = -1, most = 0;
+  for (const [q, c] of count) if (c > most) { most = c; keep = q; }
+  return big.filter(i => where.get(i) === keep);
 }

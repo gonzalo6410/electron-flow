@@ -4,7 +4,8 @@
 import { nodeFromSmiles } from '../core/smiles.js';
 import { buildNode, enumerate } from '../core/lewis.js';
 import { relax } from '../core/geometry.js';
-import { commit, filmSteps, biggestPiece } from '../core/moves.js';
+import { commit, filmSteps, biggestPiece, filmCore } from '../core/moves.js';
+import { bestFit, rotate, add } from '../core/vectors.js';
 import { REACTIONS, resolveArrows } from '../core/reactions.js';
 
 let bad = 0;
@@ -48,6 +49,13 @@ for (const rx of REACTIONS) {
   }
   console.log(`     ${rx.name}: the heavy atoms of the biggest molecule turn ${approachTurn.toFixed(0)} degrees by the first blended frame`);
   say(jump < 1.2, `   no atom moves more than ${jump.toFixed(2)} A between two of the 21 steps (under 1.2)`);
+  // the substrate stays where it was on screen: its heavy atoms that stay together drift little from
+  // where they started (the enolate scene's acetaldehyde drifted 1.9 A and turned on screen before
+  // each step was laid onto the one before; moves review, 7 Nov 2026)
+  const core = filmCore(node, out.after).filter(i => node.atoms[i].el !== 'H');
+  let drift = 0;
+  for (const st of steps) for (const i of core) drift = Math.max(drift, len(sub(st.geo.pos[i], steps[0].geo.pos[i])));
+  say(drift < 1.0, `   the substrate's own heavy atoms drift at most ${drift.toFixed(2)} A from where they were (under 1.0; the benzyne ring opens its angles by itself)`);
   if (rx.name.startsWith('SN2')) {
     // the fault of the first round: chloromethane swung about 90 degrees to meet the hydroxide
     const ax = st => sub(st.geo.pos[3], st.geo.pos[2]); // C is atom 2 and Cl atom 3 of '[OH-].[Na+].CCl'
@@ -57,6 +65,14 @@ for (const rx of REACTIONS) {
     const angs = steps.slice(1, -1).map(st => angle(st.geo.pos, O, C, Cl));
     say(Math.min(...angs) > 170, `   O-C-Cl stays on a line through the blend: least ${Math.min(...angs).toFixed(1)} degrees`);
   }
+}
+// bestFit finds a known turn and shift again
+{
+  const pts = [[0, 0, 0], [1.5, 0, 0], [0, 1.2, 0.3], [-0.4, 0.2, 1.1], [2, 1, -1]];
+  const moved = pts.map(p => add(rotate(p, [0.36, 0.48, 0.8], 1.1), [3, -2, 0.5]));
+  const back = bestFit(moved, pts);
+  const err = Math.max(...moved.map((p, k) => len(sub(back(p), pts[k]))));
+  say(err < 1e-9, `bestFit lays a turned and shifted set back on itself (worst miss ${err.toExponential(1)} A)`);
 }
 if (bad) { console.log(`${bad} failed`); process.exit(1); }
 console.log('film checks pass');

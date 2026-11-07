@@ -2,7 +2,7 @@
 // and the transition hybrid, on the basic mechanisms (ledger items 5, 11, 12, 15)
 import { buildNode, enumerate } from '../core/lewis.js';
 import { nodeFromSmiles, toSmiles } from '../core/smiles.js';
-import { applyArrows, commit, specAfter, combine, withCharges, transitionFrames, describeArrow } from '../core/moves.js';
+import { applyArrows, commit, specAfter, combine, withCharges, transitionFrames, describeArrow, filmRoles } from '../core/moves.js';
 import { relax } from '../core/geometry.js';
 
 let bad = 0;
@@ -32,6 +32,7 @@ const run = spec => { const node = buildNode(spec); return { node, r: enumerate(
   check('after: chloride is a spectator anion with charge -1', out.spec.atoms[Cl].ion === -1 && out.spec.atoms[Cl].written === -1);
   check('after: oxygen neutral, carbon neutral', out.spec.atoms[O].written === 0 && out.spec.atoms[C].written === 0);
   check('after: sodium follows the charge to the chloride', hasEdge(out.spec, Na, Cl) && !hasEdge(out.spec, Na, O));
+  check('after: one tie between sodium and chloride, not two on top of each other (moves review, 7 Nov 2026)', out.spec.adj.filter(e => ekey(e) === ekey([Na, Cl])).length === 1);
   check('after: one structure, no holes', out.rAfter.structures.length === 1 && out.rAfter.holes === 0);
   const h = out.hybrid;
   check('hybrid: two structures', h.structures.length === 2);
@@ -258,6 +259,34 @@ const run = spec => { const node = buildNode(spec); return { node, r: enumerate(
   const { node, r } = run(spec);
   const out = commit(node, r.structures[0], [{ from: { bond: [0, 1] }, to: { atom: 1 } }]);
   check('C=C to C(+)-C(-) is refused: holes where the molecule has none', out.kind === 'refused' && /2 more electrons missing/.test(out.reason));
+}
+
+// ---------- what each pair does during the film (filmRoles) ----------
+{
+  // SN1 step 1: the C-Br bond goes and the bromide is then tied to the same carbon; during the film
+  // that pair is a bond being broken (drawn fading, never as a hashed line) and a tie coming in
+  const spec = nodeFromSmiles('CC(C)(C)Br');
+  const Cq = 1, Br = find(spec, 'Br');
+  const { node, r } = run(spec);
+  const out = commit(node, r.structures[0], [{ from: { bond: [Cq, Br] }, to: { atom: Br } }], r);
+  const frames = transitionFrames(node, out.after, 3);
+  const roles = filmRoles(node, out.after, frames[0].r, frames[2].r);
+  const k = frames[0].r.edges.findIndex(e => ekey(e) === ekey([Cq, Br]));
+  check('SN1 step 1 film: C-Br is a bond being broken and a tie after, not a tie before', roles[k].changing && roles[k].tieAfter && !roles[k].tieBefore);
+  check('SN1 step 1 film: no other pair changes', roles.filter(x => x.changing).length === 1);
+}
+{
+  // SN1 step 2: the bromide's tie to the cation fades out as its tie to the oxonium oxygen comes in;
+  // neither is a bond being made or broken; O-C is
+  const spec = nodeFromSmiles('C[C+](C)C.[Br-].O');
+  const Cq = 1, Br = find(spec, 'Br'), Ow = find(spec, 'O');
+  const { node, r } = run(spec);
+  const out = commit(node, r.structures[0], [{ from: { pair: Ow }, to: { bond: [Ow, Cq] } }], r);
+  const frames = transitionFrames(node, out.after, 3);
+  const roles = filmRoles(node, out.after, frames[0].r, frames[2].r);
+  const role = (i, j) => roles[frames[0].r.edges.findIndex(e => ekey(e) === ekey([i, j]))];
+  check('SN1 step 2 film: Br tie to the cation before only, to the oxygen after only', role(Cq, Br).tieBefore && !role(Cq, Br).tieAfter && role(Ow, Br).tieAfter && !role(Ow, Br).tieBefore);
+  check('SN1 step 2 film: O-C is the bond being made, the ties are not', role(Ow, Cq).changing && !role(Cq, Br).changing && !role(Ow, Br).changing);
 }
 
 console.log(bad ? `${bad} FAILED` : 'all passed');
